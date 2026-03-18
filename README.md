@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SoftwarePOS
 
-## Getting Started
+POS web para un negocio familiar con foco en tres frentes:
 
-First, run the development server:
+1. Registrar ventas por socia.
+2. Controlar gastos individuales y compartidos.
+3. Facilitar inventario, reportes y operacion diaria.
+
+Estado auditado localmente el 17 de marzo de 2026.
+
+## Que existe hoy
+
+- POS con busqueda manual y escaner por codigo de barras.
+- Carrito de venta con agrupacion por socia.
+- Sesion de caja automatica con apertura y cierre.
+- Registro de gastos individuales y compartidos.
+- Reportes historicos por sesion.
+- Inventario con CRUD base y etiquetas de codigo de barras.
+- Exportacion de reportes a Excel y PDF.
+- Base PWA inicial con `manifest.json` y `public/sw.js`.
+- Integracion base con Supabase.
+
+## Que falta madurar
+
+- Documentacion funcional y tecnica mas completa.
+- Endurecer validaciones de negocio en base de datos.
+- Flujo robusto de inventario asistido e inteligente.
+- Reportes agregados por rango de fechas y mejores metricas.
+- Seguridad, auditoria, backups y despliegue.
+- Pruebas automaticas.
+
+## Stack
+
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS 4
+- Supabase
+- Zustand
+- TanStack Query
+- jsPDF / XLSX
+
+## Estructura principal
+
+- `src/app/(dashboard)/caja`: pantalla principal del POS.
+- `src/app/(dashboard)/gastos`: registro y consulta de gastos.
+- `src/app/(dashboard)/inventario`: gestion de productos y stock.
+- `src/app/(dashboard)/cierre`: cierre de caja y exportacion.
+- `src/app/(dashboard)/reportes`: historial de sesiones.
+- `supabase/schema.sql`: esquema base de datos.
+- `supabase/functions.sql`: funciones RPC para stock.
+- `docs/PLAN_MAESTRO.md`: hoja de ruta y bitacora del proyecto.
+
+## Configuracion local
+
+1. Instala dependencias:
+
+```bash
+npm install
+```
+
+2. Configura variables en `.env.local`:
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+```
+
+3. Ejecuta el esquema y funciones en Supabase:
+
+- `supabase/schema.sql`
+- `supabase/functions.sql`
+
+4. Inicia desarrollo:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Modelo de negocio actual
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Cada producto pertenece a una socia.
+- Cada venta se registra dentro de una sesion de caja.
+- Los gastos pueden ser:
+  - `individual`: descuentan a una sola socia.
+  - `shared`: se reparten entre todas las socias.
+- El cierre calcula ventas, gastos y neto por socia.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Documento de continuidad
 
-## Learn More
+La referencia principal para seguir el proyecto esta en:
 
-To learn more about Next.js, take a look at the following resources:
+- `docs/PLAN_MAESTRO.md`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Ese archivo debe actualizarse cuando cambie el alcance, se complete una fase o aparezcan nuevas decisiones importantes.
