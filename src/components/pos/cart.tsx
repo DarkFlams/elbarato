@@ -6,7 +6,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ShoppingCart, Trash2, DollarSign, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,16 +16,10 @@ import { CartItemRow } from "./cart-item";
 import { SaleSummary } from "./sale-summary";
 import { PaymentSelector } from "./payment-selector";
 import { SaleTicket } from "./sale-ticket";
-import { createClient } from "@/lib/supabase/client";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
 import { toast } from "sonner";
 import { playCheckoutSound } from "@/lib/audio";
-
-interface RegisterSaleResult {
-  sale_id: string;
-  total: number;
-  item_count: number;
-}
+import { registerSaleWithOfflineFallback } from "@/lib/offline/rpc";
 
 export function Cart() {
   const {
@@ -54,8 +48,11 @@ export function Cart() {
     saleId: string;
     date: Date;
   } | null>(null);
+  const submitInFlightRef = useRef(false);
+  const saleRequestKeyRef = useRef<string | null>(null);
 
   const handleRegisterSale = async () => {
+    if (submitInFlightRef.current || isProcessing) return;
     if (items.length === 0) return;
 
     if (!session) {
@@ -68,17 +65,23 @@ export function Cart() {
       return;
     }
 
+    const requestKey =
+      saleRequestKeyRef.current ??
+      (globalThis.crypto?.randomUUID?.() ??
+        `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+    saleRequestKeyRef.current = requestKey;
+    submitInFlightRef.current = true;
     setProcessing(true);
 
     try {
-      const supabase = createClient();
       const salePayload = items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
         unit_price: item.price_override,
       }));
 
-      const { data, error } = await supabase.rpc("register_sale", {
+      const registerResult = await registerSaleWithOfflineFallback({
         p_cash_session_id: session.id,
         p_payment_method: paymentMethod,
         p_items: salePayload,
@@ -91,13 +94,36 @@ export function Cart() {
           paymentMethod === "cash" && amountReceived
             ? Math.max(0, Number(amountReceived) - total)
             : null,
+        p_idempotency_key: requestKey,
       });
 
-      if (error) throw error;
+      if (registerResult.mode === "queued") {
+        const offlineSaleId = `OFFLINE-${registerResult.operation_id
+          .slice(0, 8)
+          .toUpperCase()}`;
+        const ticketSnapshot = {
+          items: [...items],
+          summaries: getPartnerSummaries(),
+          total,
+          paymentMethod,
+          saleId: offlineSaleId,
+          date: new Date(),
+        };
+        setLastTicketData(ticketSnapshot);
+        setTicketOpen(true);
 
-      const result = (Array.isArray(data) ? data[0] : data) as
-        | RegisterSaleResult
-        | null;
+        playCheckoutSound();
+        toast.warning(`Venta guardada offline - $${total.toFixed(2)}`, {
+          description:
+            "Pendiente de sincronizacion. Se enviara al volver internet.",
+        });
+
+        clearCart();
+        saleRequestKeyRef.current = null;
+        return;
+      }
+
+      const result = registerResult.data;
 
       if (!result?.sale_id) {
         throw new Error(
@@ -117,17 +143,19 @@ export function Cart() {
         date: new Date(),
       };
       setLastTicketData(ticketSnapshot);
+      setTicketOpen(true);
 
       playCheckoutSound();
-      toast.success(`Venta registrada — $${registeredTotal.toFixed(2)}`, {
+      toast.success(`Venta registrada - $${registeredTotal.toFixed(2)}`, {
         description: `${registeredItemCount} producto${
           registeredItemCount > 1 ? "s" : ""
-        } · ${
+        } - ${
           paymentMethod === "cash" ? "Efectivo" : "Transferencia"
         }`,
       });
 
       clearCart();
+      saleRequestKeyRef.current = null;
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Error al registrar venta";
@@ -135,6 +163,7 @@ export function Cart() {
       console.error("[Cart] handleRegisterSale error:", err);
     } finally {
       setProcessing(false);
+      submitInFlightRef.current = false;
     }
   };
 
@@ -180,9 +209,9 @@ export function Cart() {
       </div>
 
       {/* Items */}
-      <ScrollArea className="flex-1 bg-white">
+      <ScrollArea className="flex-1 min-h-0 bg-white">
         {items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-12 h-full min-h-[300px] text-slate-400 gap-3">
+          <div className="flex flex-col items-center justify-center p-6 lg:p-12 h-full min-h-[150px] text-slate-400 gap-3">
             <div className="w-20 h-20 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100 border-dashed">
               <ShoppingCart className="h-8 w-8 text-slate-300" />
             </div>
@@ -207,7 +236,7 @@ export function Cart() {
       </ScrollArea>
 
       {/* Footer: Total + Pago + Registrar */}
-      <div className="border-t border-slate-200 bg-slate-50/30 px-5 py-4 space-y-4 shrink-0">
+      <div className="border-t border-slate-200 bg-slate-50/30 px-5 py-2.5 space-y-2.5 shrink-0">
         <SaleSummary />
 
         <PaymentSelector />
@@ -223,7 +252,7 @@ export function Cart() {
               Number(amountReceived) > 0 &&
               Number(amountReceived) < total)
           }
-          className={`w-full h-14 text-base font-bold shadow-md transition-all duration-200 border-0 ${
+          className={`w-full h-11 text-base font-bold shadow-md transition-all duration-200 border-0 ${
             items.length === 0
               ? "bg-slate-100 text-slate-400 shadow-none cursor-not-allowed"
               : !paymentMethod
@@ -238,7 +267,7 @@ export function Cart() {
             ? "Registrando..."
             : items.length === 0
             ? "Registrar Venta"
-            : `Registrar Venta — $${total.toFixed(2)}`}
+            : `Registrar Venta - $${total.toFixed(2)}`}
         </Button>
       </div>
 
@@ -258,3 +287,4 @@ export function Cart() {
     </div>
   );
 }
+

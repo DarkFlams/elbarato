@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { DollarSign, Printer, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCart } from "@/hooks/use-cart";
 import { PaymentSelector } from "./payment-selector";
 import { SaleSummary } from "./sale-summary";
 import { SaleTicket } from "./sale-ticket";
-import { createClient } from "@/lib/supabase/client";
 import type {
   CashSession,
   CartItem,
@@ -15,15 +14,10 @@ import type {
 } from "@/types/database";
 import { toast } from "sonner";
 import { playCheckoutSound } from "@/lib/audio";
+import { registerSaleWithOfflineFallback } from "@/lib/offline/rpc";
 
 interface CheckoutPanelProps {
   cashSession: CashSession | null;
-}
-
-interface RegisterSaleResult {
-  sale_id: string;
-  total: number;
-  item_count: number;
 }
 
 export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
@@ -49,11 +43,14 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
     saleId: string;
     date: Date;
   } | null>(null);
+  const submitInFlightRef = useRef(false);
+  const saleRequestKeyRef = useRef<string | null>(null);
 
   const itemCount = getItemCount();
   const total = getTotal();
 
   const handleRegisterSale = async () => {
+    if (submitInFlightRef.current || isProcessing) return;
     if (items.length === 0) return;
 
     if (!cashSession) {
@@ -66,30 +63,58 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
       return;
     }
 
+    const requestKey =
+      saleRequestKeyRef.current ??
+      (globalThis.crypto?.randomUUID?.() ??
+        `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+    saleRequestKeyRef.current = requestKey;
+    submitInFlightRef.current = true;
     setProcessing(true);
 
     try {
-      const supabase = createClient();
       const salePayload = items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
         unit_price: item.unit_price,
       }));
 
-      const { data, error } = await supabase.rpc("register_sale", {
+      const registerResult = await registerSaleWithOfflineFallback({
         p_cash_session_id: cashSession.id,
         p_payment_method: paymentMethod,
         p_items: salePayload,
         p_notes: notes.trim() || null,
         p_amount_received: paymentMethod === 'cash' && amountReceived ? Number(amountReceived) : null,
         p_change_given: paymentMethod === 'cash' && amountReceived ? Math.max(0, Number(amountReceived) - total) : null,
+        p_idempotency_key: requestKey,
       });
 
-      if (error) throw error;
+      if (registerResult.mode === "queued") {
+        const offlineSaleId = `OFFLINE-${registerResult.operation_id
+          .slice(0, 8)
+          .toUpperCase()}`;
+        const ticketSnapshot = {
+          items: [...items],
+          summaries: getPartnerSummaries(),
+          total,
+          paymentMethod,
+          saleId: offlineSaleId,
+          date: new Date(),
+        };
+        setLastTicketData(ticketSnapshot);
 
-      const result = (Array.isArray(data) ? data[0] : data) as
-        | RegisterSaleResult
-        | null;
+        playCheckoutSound();
+        toast.warning(`Venta guardada offline - $${total.toFixed(2)}`, {
+          description:
+            "Pendiente de sincronizacion. Se enviara al volver internet.",
+        });
+
+        clearCart();
+        saleRequestKeyRef.current = null;
+        return;
+      }
+
+      const result = registerResult.data;
 
       if (!result?.sale_id) {
         throw new Error(
@@ -120,6 +145,7 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
       });
 
       clearCart();
+      saleRequestKeyRef.current = null;
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Error al registrar venta";
@@ -127,6 +153,7 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
       console.error("[Checkout] handleRegisterSale error:", err);
     } finally {
       setProcessing(false);
+      submitInFlightRef.current = false;
     }
   };
 

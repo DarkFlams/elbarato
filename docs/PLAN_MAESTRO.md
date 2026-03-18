@@ -2,7 +2,7 @@
 
 Documento de contexto operativo para no perder continuidad entre sesiones.
 
-Ultima actualizacion: 2026-03-17
+Ultima actualizacion: 2026-03-18
 
 ## 1. Vision del producto
 
@@ -195,7 +195,7 @@ Entregables:
 - El proyecto tiene muchos cambios locales sin confirmar; hay que trabajar con cuidado.
 - Se observan textos con problemas de encoding.
 - El `service worker` es basico y no conviene considerarlo solucion offline completa.
-- El lint ya no muestra errores ni warnings.
+- El lint sigue mostrando errores pendientes fuera del flujo critico de caja.
 - La documentacion tecnica todavia esta naciendo.
 
 ## 7. Regla de trabajo para proximas sesiones
@@ -258,6 +258,7 @@ Archivos tocados:
 
 - `src/types/database.ts`
 - `src/hooks/use-cart.ts`
+
 - `src/app/(dashboard)/caja/page.tsx`
 - `src/components/pos/product-search.tsx`
 - `src/components/pos/cart-item.tsx`
@@ -525,3 +526,88 @@ Archivos tocados:
 Siguiente paso recomendado:
 
 - ejecutar `supabase/reset_inventory_for_inven.sql` en Supabase y solo despues importar `INVEN.xlsx`.
+
+### 2026-03-18 - Blindaje anti duplicados en caja y gastos
+
+Resumen:
+
+- Se agrego idempotencia en ventas y gastos para evitar duplicados por doble click, lag o reintentos.
+- `register_sale` ahora acepta `p_idempotency_key` y devuelve la venta existente cuando la llave ya fue usada.
+- Se creo `upsert_expense_with_allocations` para registrar/editar gasto + asignaciones en una sola transaccion.
+- Se aplicaron guardas de doble envio en frontend con `inFlightRef` en caja y gastos.
+- No se cambio la regla funcional de stock solicitada por usuario.
+
+Archivos tocados:
+
+- `supabase/functions.sql`
+- `supabase/schema.sql`
+- `supabase/schema_patch_existing.sql`
+- `src/components/pos/cart.tsx`
+- `src/components/pos/checkout-panel.tsx`
+- `src/components/expenses/expense-form.tsx`
+- `src/components/pos/expenses-panel.tsx`
+
+Siguiente paso recomendado:
+
+- ejecutar SQL actualizado en Supabase y validar en caja: doble click de venta, doble click de gasto y reintento tras cortar internet.
+
+### 2026-03-18 - Inicio de modo offline real (fase base)
+
+Resumen:
+
+- Se crea plan offline dedicado en `docs/PLAN_OFFLINE.md` para ejecutar por fases sin perder contexto.
+- Se implementa infraestructura base de cola local persistente para operaciones criticas.
+- Se implementa sincronizacion automatica con lock para evitar ejecuciones en paralelo.
+- Se implementa fallback offline en ventas y gastos (registro en cola si no hay conectividad).
+- Se agrega indicador global en dashboard para mostrar estado offline, pendientes y accion de sincronizar.
+
+Archivos tocados:
+
+- `docs/PLAN_OFFLINE.md`
+- `src/lib/offline/types.ts`
+- `src/lib/offline/queue.ts`
+- `src/lib/offline/sync.ts`
+- `src/lib/offline/rpc.ts`
+- `src/hooks/use-offline-sync.ts`
+- `src/components/offline/offline-sync-indicator.tsx`
+- `src/app/(dashboard)/layout.tsx`
+- `src/components/pos/cart.tsx`
+- `src/components/pos/checkout-panel.tsx`
+- `src/components/pos/expenses-panel.tsx`
+- `src/components/expenses/expense-form.tsx`
+
+Validacion:
+
+- Build OK (`npm run build`).
+- ESLint en archivos tocados sin errores (solo warnings previos no bloqueantes en layout).
+
+Siguiente paso recomendado:
+
+- Fase 2 offline: crear pantalla operativa de cola (pendientes/fallidos) con reintento manual y auditoria visual por transaccion.
+
+### 2026-03-18 - Operacion manual de cola offline (fase 2)
+
+Resumen:
+
+- Se agrega nueva pantalla `Offline` en dashboard para gestionar operaciones locales pendientes.
+- La pantalla muestra pendientes y fallidos con detalle de operacion, intento, error y fechas.
+- Se agrega reintento manual por operacion.
+- Se agrega reintento masivo de fallidos.
+- Se agrega eliminacion manual de operaciones invalidas en cola local.
+- Se integra acceso directo desde sidebar para uso operativo del equipo.
+
+Archivos tocados:
+
+- `src/app/(dashboard)/offline/page.tsx`
+- `src/app/(dashboard)/layout.tsx`
+- `src/lib/offline/queue.ts`
+- `docs/PLAN_OFFLINE.md`
+
+Validacion:
+
+- Build OK (`npm run build`).
+- ESLint OK en archivos nuevos/tocados de fase offline.
+
+Siguiente paso recomendado:
+
+- completar fase 3 con telemetria basica (ultimo sync exitoso, cantidad sincronizada por corrida y contador de errores recurrentes).
