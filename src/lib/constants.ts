@@ -3,8 +3,8 @@ export const PARTNERS = {
   rosa: {
     id: "rosa",
     displayName: "Rosa",
-    color: "#C97993",
-    colorLight: "rgba(201, 121, 147, 0.12)",
+    color: "#C026D3",
+    colorLight: "rgba(192, 38, 211, 0.12)",
     emoji: "R",
   },
   lorena: {

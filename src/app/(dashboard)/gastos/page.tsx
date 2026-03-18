@@ -38,6 +38,7 @@ export default function GastosPage() {
       const { data, error } = await supabase
         .from("partners")
         .select("*")
+        .eq("is_expense_eligible", true)
         .order("name");
 
       if (error) throw error;

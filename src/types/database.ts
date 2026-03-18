@@ -36,6 +36,7 @@ export interface Partner {
   name: PartnerEnum;
   display_name: string;
   color_hex: string;
+  is_expense_eligible: boolean;
   created_at: string;
 }
 
@@ -174,6 +175,7 @@ export interface CartItem {
   owner_color: string;
   available_stock: number;
   unit_price: number;
+  price_override: number;
   quantity: number;
   subtotal: number;
 }

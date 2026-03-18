@@ -1,20 +1,20 @@
 /**
  * @file caja/page.tsx
  * @description Pantalla principal del Punto de Venta (POS).
+ *              Layout: Carrito unificado (izq) + Stats/Gastos (der)
  */
 
 "use client";
 
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import {
-  ScanBarcode,
   Wifi,
   WifiOff,
-  ChevronDown,
-  ChevronUp,
   Banknote,
   DollarSign,
   PenLine,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
@@ -31,20 +31,19 @@ import { toast } from "sonner";
 import { playSuccessSound, playErrorSound } from "@/lib/audio";
 import { OpenSessionModal } from "@/components/pos/open-session-modal";
 import { SessionStats } from "@/components/pos/session-stats";
-import { CheckoutPanel } from "@/components/pos/checkout-panel";
+import { ExpensesPanel } from "@/components/pos/expenses-panel";
 
 export default function CajaPage() {
   const { session, isLoading: sessionLoading } = useCashSession();
-  const { 
-    addItem, 
-    items, 
-    notes, 
-    setNotes, 
-    amountReceived, 
-    setAmountReceived, 
-    getTotal, 
-    paymentMethod, 
-    isProcessing 
+  const {
+    addItem,
+    items,
+    notes,
+    setNotes,
+    amountReceived,
+    setAmountReceived,
+    getTotal,
+    isProcessing,
   } = useCart();
   const total = getTotal();
 
@@ -76,7 +75,7 @@ export default function CajaPage() {
         if (!data) {
           playErrorSound();
           toast.error("Producto no encontrado", {
-            description: `Codigo: ${barcode}`,
+            description: `Código: ${barcode}`,
           });
           return;
         }
@@ -94,13 +93,12 @@ export default function CajaPage() {
         const result = addItem(product);
         if (!result.ok) {
           playErrorSound();
-          toast.warning(`No puedes agregar mas de ${product.name}`, {
+          toast.warning(`No puedes agregar más de ${product.name}`, {
             description: `Stock disponible: ${result.availableStock ?? product.stock}`,
           });
           return;
         }
 
-        // En modo cobro fluido evitamos toast de exito por cada escaneo.
         playSuccessSound();
       } catch (err) {
         console.error("[CajaPage] scan error:", err);
@@ -117,10 +115,11 @@ export default function CajaPage() {
       <OpenSessionModal />
 
       <div className="flex-1 flex flex-col lg:flex-row gap-5 min-h-0 w-full overflow-hidden">
-        
-        {/* BLOQUE IZQUIERDO: Buscador y Carrito (Principal) */}
+
+        {/* BLOQUE IZQUIERDO: Buscador + Carrito Unificado */}
         <div className="flex-1 flex flex-col gap-4 min-h-0 min-w-[500px]">
-          
+
+          {/* Barra de búsqueda */}
           <div className="flex items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm shrink-0">
             <div className="flex-1">
               <ProductSearch />
@@ -151,6 +150,7 @@ export default function CajaPage() {
             </Badge>
           </div>
 
+          {/* Carrito (incluye items + total + pago + registrar) */}
           <div className="flex-1 min-h-0">
             <Cart />
           </div>
@@ -161,11 +161,11 @@ export default function CajaPage() {
             <div className="flex-1 bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2">
               <Label htmlFor="notes" className="text-slate-500 font-semibold flex items-center gap-2 text-xs uppercase tracking-wide">
                 <PenLine className="h-3.5 w-3.5" />
-                Observaciones de Venta
+                Observaciones
               </Label>
-              <Textarea 
+              <Textarea
                 id="notes"
-                placeholder="Ej. Falta entregar producto X, Cliente VIP..." 
+                placeholder="Ej. Falta entregar producto X, Cliente VIP..."
                 className="resize-none flex-1 bg-slate-50 shadow-inner border-slate-200/60 focus-visible:ring-indigo-500/30 font-medium text-slate-700"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -183,7 +183,7 @@ export default function CajaPage() {
                   </Label>
                   <div className="relative">
                     <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600 font-bold" />
-                    <Input 
+                    <Input
                       id="received"
                       type="number"
                       min="0"
@@ -207,7 +207,9 @@ export default function CajaPage() {
                       : "bg-slate-50 border-slate-200 text-slate-400"
                   }`}>
                     <DollarSign className="h-4 w-4 mr-0.5 opacity-70" />
-                    {Number(amountReceived) > 0 ? Math.max(0, Number(amountReceived) - total).toFixed(2) : "0.00"}
+                    {Number(amountReceived) > 0
+                      ? Math.max(0, Number(amountReceived) - total).toFixed(2)
+                      : "0.00"}
                   </div>
                 </div>
               </div>
@@ -216,10 +218,10 @@ export default function CajaPage() {
 
         </div>
 
-        {/* BLOQUE DERECHO: Stats y Pago (Sidebar Fija) */}
+        {/* BLOQUE DERECHO: Stats de sesión + Gastos del día */}
         <div className="hidden lg:flex flex-col w-[380px] xl:w-[420px] shrink-0 gap-4 min-h-0">
           <SessionStats />
-          <CheckoutPanel cashSession={session} />
+          <ExpensesPanel />
         </div>
 
       </div>
@@ -231,11 +233,11 @@ export default function CajaPage() {
           className="w-full flex items-center justify-between px-4 py-3 rounded-t-xl border border-slate-200 bg-white shadow-sm"
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">Resumen y Pago</span>
+            <span className="text-sm font-semibold">Gastos del Día</span>
             {items.length > 0 && (
               <Badge
                 variant="outline"
-                className="border-indigo-200 bg-indigo-50 text-indigo-700"
+                className="border-amber-200 bg-amber-50 text-amber-700"
               >
                 {items.length}
               </Badge>
@@ -249,9 +251,9 @@ export default function CajaPage() {
         </button>
 
         {mobileCartOpen && (
-          <div className="h-[75vh] border-x border-b border-slate-200 rounded-b-xl flex flex-col gap-4 bg-slate-50 shadow-sm p-4 overflow-y-auto">
+          <div className="h-[60vh] border-x border-b border-slate-200 rounded-b-xl flex flex-col gap-4 bg-slate-50 shadow-sm p-4 overflow-y-auto">
             <SessionStats />
-            <CheckoutPanel cashSession={session} />
+            <ExpensesPanel />
           </div>
         )}
       </div>

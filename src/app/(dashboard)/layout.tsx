@@ -38,6 +38,7 @@ const navigation = [
     label: "Operaciones",
     items: [
       { title: "Punto de Venta", href: "/caja", icon: ScanBarcode },
+      { title: "Ventas", href: "/ventas", icon: ShoppingBag },
       { title: "Gastos", href: "/gastos", icon: Wallet },
     ],
   },

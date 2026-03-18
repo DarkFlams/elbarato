@@ -8,7 +8,7 @@ type PartnerPreset = {
 const PARTNER_PRESETS: Record<string, PartnerPreset> = {
   rosa: {
     displayName: "Rosa",
-    color: "#C97993",
+    color: "#C026D3",
   },
   lorena: {
     displayName: "Lorena",

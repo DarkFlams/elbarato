@@ -14,6 +14,8 @@
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 // ============================================
 // TIPOS
@@ -238,5 +240,243 @@ export function exportToPdf(data: ReportData, filename?: string) {
 
   // Descargar
   const fname = filename || `Cierre_${data.date.replace(/\//g, "-")}.pdf`;
+  doc.save(fname);
+}
+// ============================================
+// SALES LIST EXPORT
+// ============================================
+
+export interface SaleExportData {
+  id: string;
+  date: string;
+  time: string;
+  partner: string;
+  products: string;
+  method: string;
+  total: number;
+}
+
+export async function exportSalesToExcel(sales: SaleExportData[], filename?: string) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Ventas", {
+    views: [{ showGridLines: false }]
+  });
+
+  sheet.columns = [
+    { key: "id", width: 14 },
+    { key: "date", width: 16 },
+    { key: "time", width: 12 },
+    { key: "partner", width: 22 },
+    { key: "products", width: 65 },
+    { key: "method", width: 18 },
+    { key: "total", width: 16 },
+  ];
+
+  // ===================================
+  // CABECERA DEL REPORTE
+  // ===================================
+  sheet.mergeCells("A1:G1");
+  const titleCell = sheet.getCell("A1");
+  titleCell.value = "REPORTE DETALLADO DE VENTAS";
+  titleCell.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
+  titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } }; // Indigo 600
+  titleCell.alignment = { vertical: "middle", horizontal: "center" };
+  sheet.getRow(1).height = 30;
+
+  // METADATOS
+  sheet.getCell("A3").value = "Generado el:";
+  sheet.getCell("A3").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("B3").value = new Date().toLocaleString("es-EC");
+
+  sheet.getCell("A4").value = "Total de Tickets:";
+  sheet.getCell("A4").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("B4").value = sales.length;
+
+  const totalAmount = sales.reduce((sum, s) => sum + s.total, 0);
+  sheet.getCell("A5").value = "Recaudación Total:";
+  sheet.getCell("A5").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("B5").value = totalAmount;
+  sheet.getCell("B5").numFmt = '"$"#,##0.00';
+  sheet.getCell("B5").font = { bold: true, color: { argb: "FF16A34A" } }; // Green 600
+
+  // ===================================
+  // CABECERA DE LA TABLA
+  // ===================================
+  const headerRow = sheet.getRow(7);
+  headerRow.values = [
+    "TICKET #",
+    "FECHA",
+    "HORA",
+    "SOCIA / ORIGEN",
+    "PRODUCTOS VENDIDOS",
+    "MÉTODO DE PAGO",
+    "TOTAL ($)"
+  ];
+  headerRow.height = 22;
+
+  headerRow.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } }; // Slate 100
+    cell.font = { bold: true, color: { argb: "FF334155" }, size: 10 }; // Slate 700
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FFCBD5E1" } },
+      bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+      left: { style: "thin", color: { argb: "FFCBD5E1" } },
+      right: { style: "thin", color: { argb: "FFCBD5E1" } },
+    };
+  });
+
+  // ===================================
+  // DATOS
+  // ===================================
+  let currentRow = 8;
+  sales.forEach((s, index) => {
+    const row = sheet.getRow(currentRow);
+    row.values = {
+      id: s.id.toUpperCase(),
+      date: s.date,
+      time: s.time,
+      partner: s.partner,
+      products: s.products,
+      method: s.method,
+      total: s.total
+    };
+
+    const isEven = index % 2 === 0;
+    const bgColor = isEven ? "FFFFFFFF" : "FFF8FAFC"; // White or Slate 50
+
+    row.eachCell((cell, colNumber) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bgColor } };
+      cell.border = {
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+      cell.alignment = { 
+        vertical: "middle", 
+        horizontal: colNumber === 7 ? "right" : "left", 
+        wrapText: colNumber === 5 
+      };
+      if (colNumber === 7) cell.numFmt = '"$"#,##0.00';
+    });
+    
+    // Auto-adjust height for products wrap text
+    if (s.products.length > 55) {
+      row.height = 20 + Math.floor(s.products.length / 55) * 12;
+    } else {
+      row.height = 20;
+    }
+
+    currentRow++;
+  });
+
+  // ===================================
+  // FILA DE TOTALES FINAL
+  // ===================================
+  const tableTotalRow = sheet.getRow(currentRow);
+  tableTotalRow.values = {
+    method: "TOTAL FINAL:",
+    total: totalAmount
+  };
+  tableTotalRow.height = 25;
+
+  tableTotalRow.eachCell((cell, colNumber) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+    
+    if (colNumber >= 6) {
+      cell.font = { bold: true, color: { argb: "FF0F172A" } };
+      cell.border = {
+        top: { style: "double", color: { argb: "FF94A3B8" } },
+        bottom: { style: "thick", color: { argb: "FF94A3B8" } },
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+    } else {
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE2E8F0" } },
+      }
+    }
+    
+    if (colNumber === 7) {
+      cell.numFmt = '"$"#,##0.00';
+    }
+  });
+
+  // ===================================
+  // DESCARGA
+  // ===================================
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const fname = filename || `Ventas_Reporte_${new Date().toISOString().split("T")[0]}.xlsx`;
+  saveAs(blob, fname);
+}
+
+export function exportSalesToPdf(sales: SaleExportData[], filename?: string) {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  // Header
+  doc.setFontSize(20);
+  doc.setTextColor(30);
+  doc.text("Reporte de Ventas", 14, 22);
+
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Generado: ${new Date().toLocaleString("es-EC")}`, 14, 30);
+  doc.text(`Total tickets: ${sales.length}`, 14, 35);
+
+  const totalAmount = sales.reduce((sum, s) => sum + s.total, 0);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(30);
+  doc.text(`VENTAS TOTALES: $${totalAmount.toFixed(2)}`, pageWidth - 14, 35, { align: "right" });
+
+  const tableBody = sales.map((s) => [
+    s.id.toUpperCase().slice(0, 8),
+    s.date,
+    s.time,
+    s.partner,
+    s.products,
+    s.method,
+    `$${s.total.toFixed(2)}`,
+  ]);
+
+  // Add total row to table body
+  tableBody.push([
+    "TOTAL",
+    "",
+    "",
+    "",
+    "",
+    "",
+    `$${totalAmount.toFixed(2)}`,
+  ]);
+
+  autoTable(doc, {
+    startY: 45,
+    head: [["ID", "Fecha", "Hora", "Socia", "Productos", "Pago", "Total"]],
+    body: tableBody,
+    theme: "grid",
+    headStyles: {
+      fillColor: [79, 70, 229], // Indigo 600
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+    },
+    styles: {
+      fontSize: 8,
+      cellPadding: 3,
+    },
+    columnStyles: {
+      6: { halign: "right" },
+    },
+    didParseCell: (data) => {
+      if (data.row.index === tableBody.length - 1) {
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.fillColor = [240, 240, 240];
+      }
+    },
+  });
+
+  const fname = filename || `Ventas_${new Date().toISOString().split("T")[0]}.pdf`;
   doc.save(fname);
 }

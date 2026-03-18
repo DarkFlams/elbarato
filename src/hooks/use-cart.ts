@@ -19,6 +19,7 @@ interface CartState {
   addItem: (product: ProductWithOwner) => CartMutationResult;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => CartMutationResult;
+  updatePrice: (productId: string, newPrice: number) => void;
   setPaymentMethod: (method: PaymentMethod | null) => void;
   clearCart: () => void;
   setProcessing: (value: boolean) => void;
@@ -88,6 +89,7 @@ export const useCart = create<CartState>((set, get) => ({
         owner_color: product.owner.color_hex,
         available_stock: product.stock,
         unit_price: product.sale_price,
+        price_override: product.sale_price, // Inicialmente es el precio original
         quantity: 1,
         subtotal: product.sale_price,
       };
@@ -126,12 +128,22 @@ export const useCart = create<CartState>((set, get) => ({
     set((state) => ({
       items: state.items.map((item) =>
         item.product_id === productId
-          ? { ...item, quantity, subtotal: quantity * item.unit_price }
+          ? { ...item, quantity, subtotal: quantity * item.price_override }
           : item
       ),
     }));
 
     return { ok: true, availableStock: existingItem.available_stock };
+  },
+
+  updatePrice: (productId: string, newPrice: number) => {
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.product_id === productId
+          ? { ...item, price_override: newPrice, subtotal: item.quantity * newPrice }
+          : item
+      ),
+    }));
   },
 
   setPaymentMethod: (method: PaymentMethod | null) => {
