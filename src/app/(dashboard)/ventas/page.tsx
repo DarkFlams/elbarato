@@ -15,6 +15,13 @@ import {
   ReceiptText,
   Download,
   FileText,
+  Wallet,
+  TrendingDown,
+  TrendingUp,
+  Info,
+  Receipt,
+  Users,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,12 +29,24 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { createClient } from "@/lib/supabase/client";
 import { getPartnerConfig, getPartnerConfigFromPartner } from "@/lib/partners";
-import type { Partner } from "@/types/database";
+import type { Partner, Expense, ExpenseAllocation } from "@/types/database";
+
+interface ExpenseWithAllocations extends Expense {
+  expense_allocations: ExpenseAllocation[];
+}
 import {
   SaleDetailDrawer,
   type SaleDetailData,
 } from "@/components/sales/sale-detail-drawer";
 import { exportSalesToExcel, exportSalesToPdf, type SaleExportData } from "@/lib/export-utils";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 function formatDateInput(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -36,10 +55,16 @@ function formatDateInput(date: Date) {
 export default function VentasPage() {
   const [sales, setSales] = useState<SaleDetailData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState(() => formatDateInput(new Date()));
+  const [toDate, setToDate] = useState(() => formatDateInput(new Date()));
+  const [activePreset, setActivePreset] = useState<number | null>(1);
   const [selectedSale, setSelectedSale] = useState<SaleDetailData | null>(null);
   const [filterPartner, setFilterPartner] = useState<string | null>(null);
+
+  // Estados nuevos para Liquidación (Cintillo)
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseWithAllocations[]>([]);
+  const [showExpensesDrawer, setShowExpensesDrawer] = useState(false);
 
   const fetchSales = useCallback(async () => {
     setIsLoading(true);
@@ -70,15 +95,33 @@ export default function VentasPage() {
       if (toDate) query = query.lte("created_at", `${toDate}T23:59:59.999`);
       if (!fromDate && !toDate) query = query.limit(50); // Default limit
 
-      const [salesRes, partnersRes] = await Promise.all([
+      let expQuery = supabase.from("expenses").select(`
+        *,
+        expense_allocations (
+          partner_id,
+          amount
+        )
+      `).order("created_at", { ascending: false });
+
+      if (fromDate) expQuery = expQuery.gte("created_at", `${fromDate}T00:00:00`);
+      if (toDate) expQuery = expQuery.lte("created_at", `${toDate}T23:59:59.999`);
+      if (!fromDate && !toDate) expQuery = expQuery.limit(50);
+
+      const [salesRes, expRes, partnersRes] = await Promise.all([
         query,
-        supabase.from("partners").select("id, name, display_name, color_hex"),
+        expQuery,
+        supabase.from("partners").select("*").order("name"),
       ]);
 
       if (salesRes.error) throw salesRes.error;
+      if (expRes.error) throw expRes.error;
+
+      const fetchedPartners = (partnersRes.data || []) as Partner[];
+      setPartners(fetchedPartners);
+      setExpenses((expRes.data as unknown as ExpenseWithAllocations[]) || []);
 
       const partnerMap: Record<string, Partner> = {};
-      for (const p of (partnersRes.data || []) as Partner[]) {
+      for (const p of fetchedPartners) {
         partnerMap[p.id] = p;
         partnerMap[p.name] = p; 
         const normName = p.name ? p.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "") : "";
@@ -126,11 +169,13 @@ export default function VentasPage() {
     start.setDate(end.getDate() - (days - 1));
     setFromDate(formatDateInput(start));
     setToDate(formatDateInput(end));
+    setActivePreset(days);
   };
 
   const clearFilters = () => {
     setFromDate("");
     setToDate("");
+    setActivePreset(null);
   };
 
   const hasFilters = Boolean(fromDate || toDate);
@@ -208,13 +253,59 @@ export default function VentasPage() {
     });
   };
 
+  const getLiquidationData = () => ({
+    totalSales,
+    totalExpenses: totalExpensesAmount,
+    netIncome,
+    partnerName: filterPartner ? getPartnerConfig({ name: filterPartner }).displayName : "Todas las Socias",
+    expensesDetail: myExpenses.map(e => ({ description: e.description, amount: e.amount, date: e.date }))
+  });
+
   const handleExportExcel = () => {
-    exportSalesToExcel(prepareExportData());
+    exportSalesToExcel(prepareExportData(), getLiquidationData());
   };
 
   const handleExportPdf = () => {
-    exportSalesToPdf(prepareExportData());
+    exportSalesToPdf(prepareExportData(), getLiquidationData());
   };
+
+  // ==========================================
+  // Liquidación de Gastos (Cintillo)
+  // ==========================================
+  const selectedPartnerDb = filterPartner 
+    ? partners.find((p) => getPartnerConfigFromPartner(p).key === filterPartner)
+    : null;
+
+  let totalSales = totalFilteredAmount;
+  let myExpenses: Array<{ id: string; description: string; amount: number; scope: string; date: string }> = [];
+
+  if (filterPartner && selectedPartnerDb) {
+    expenses.forEach((exp) => {
+      const myAlloc = exp.expense_allocations?.find((a) => a.partner_id === selectedPartnerDb.id);
+      if (myAlloc && Number(myAlloc.amount) > 0) {
+        myExpenses.push({
+          id: exp.id,
+          description: `${exp.description} (${exp.scope === 'shared' ? 'Compartido' : 'Individual'})`,
+          amount: Number(myAlloc.amount),
+          scope: exp.scope,
+          date: exp.created_at,
+        });
+      }
+    });
+  } else {
+    expenses.forEach((exp) => {
+      myExpenses.push({
+        id: exp.id,
+        description: `${exp.description} (${exp.scope === 'shared' ? 'Compartido' : 'Individual'})`,
+        amount: Number(exp.amount),
+        scope: exp.scope,
+        date: exp.created_at,
+      });
+    });
+  }
+
+  const totalExpensesAmount = myExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const netIncome = totalSales - totalExpensesAmount;
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] gap-4">
@@ -290,16 +381,46 @@ export default function VentasPage() {
 
         {/* Date Filters */}
         <div className="flex flex-wrap items-center gap-3">
+          <div className="flex bg-slate-100/50 p-1 rounded-lg border border-slate-200">
+            {[
+              { label: "Hoy", days: 1 },
+              { label: "7 días", days: 7 },
+              { label: "30 días", days: 30 },
+            ].map((preset) => (
+              <Button
+                key={preset.days}
+                variant="ghost"
+                size="sm"
+                className={`h-8 text-xs transition-colors ${
+                  activePreset === preset.days
+                    ? "bg-white shadow-sm text-slate-900 font-medium"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+                onClick={() => setPresetRange(preset.days)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+
+          <div className="w-px h-6 bg-slate-200 mx-1" />
+
           <Input
             type="date"
             value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
+            onChange={(e) => {
+              setFromDate(e.target.value);
+              setActivePreset(null);
+            }}
             className="w-auto bg-slate-50 border-slate-200"
           />
           <Input
             type="date"
             value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
+            onChange={(e) => {
+              setToDate(e.target.value);
+              setActivePreset(null);
+            }}
             className="w-auto bg-slate-50 border-slate-200"
           />
           <Button
@@ -312,31 +433,52 @@ export default function VentasPage() {
             Limpiar
           </Button>
 
-          <div className="w-px h-6 bg-slate-200 mx-1" />
-
-          <div className="flex bg-slate-100/50 p-1 rounded-lg border border-slate-200">
-            {[
-              { label: "Hoy", days: 1 },
-              { label: "7 días", days: 7 },
-              { label: "30 días", days: 30 },
-            ].map((preset) => (
-              <Button
-                key={preset.days}
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs text-slate-600 hover:text-slate-900"
-                onClick={() => setPresetRange(preset.days)}
-              >
-                {preset.label}
-              </Button>
-            ))}
-          </div>
-
           <span className="text-xs text-slate-400 ml-auto font-medium">
             {filteredSales.length} ticket{filteredSales.length !== 1 ? "s" : ""}
           </span>
         </div>
       </div>
+
+      {/* Cintillo de Liquidación */}
+      {!isLoading && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2 shrink-0">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Total Ventas</p>
+              <h3 className="text-2xl font-bold text-slate-900">${totalSales.toFixed(2)}</h3>
+            </div>
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+               <TrendingUp className="h-5 w-5" />
+            </div>
+          </div>
+          
+          <button 
+            onClick={() => setShowExpensesDrawer(true)}
+            className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between relative group hover:border-red-200 transition-colors text-left"
+          >
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1 flex items-center gap-1">
+                Gastos a Deducir <Info className="h-3.5 w-3.5 text-slate-400 group-hover:text-red-400 transition-colors" />
+              </p>
+              <h3 className="text-2xl font-bold text-red-600">-${totalExpensesAmount.toFixed(2)}</h3>
+            </div>
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600">
+               <TrendingDown className="h-5 w-5" />
+            </div>
+            <div className="absolute inset-0 bg-red-50/0 group-hover:bg-red-50/50 transition-colors rounded-xl pointer-events-none" />
+          </button>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Liquidación Neta</p>
+              <h3 className="text-2xl font-bold text-slate-900">${netIncome.toFixed(2)}</h3>
+            </div>
+            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700">
+               <Wallet className="h-5 w-5" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Table Content */}
       <div className="flex-1 flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden min-h-0">
@@ -489,6 +631,54 @@ export default function VentasPage() {
           }}
         />
       )}
+
+      {/* Drawer Metadatos de Gastos */}
+      <Dialog open={showExpensesDrawer} onOpenChange={setShowExpensesDrawer}>
+        <DialogContent className="sm:max-w-md max-h-[85vh] p-0 overflow-hidden flex flex-col">
+          <DialogHeader className="p-6 pb-2">
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold text-slate-900">
+              <Receipt className="h-5 w-5 text-red-500" />
+              Desglose de Gastos
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 mt-1">
+              {filterPartner 
+                ? `Gastos compartidos e individuales descontados de las ventas de ${getPartnerConfig({ name: filterPartner }).displayName}.`
+                : "Listado de todos los gastos que reducen el neto total del día."}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <ScrollArea className="flex-1 px-6 pb-6">
+            {myExpenses.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 flex flex-col items-center gap-2">
+                <Receipt className="h-10 w-10 opacity-20" />
+                <p>No se han registrado gastos para mostrar.</p>
+              </div>
+            ) : (
+              <div className="space-y-3 mt-4">
+                {myExpenses.map((exp) => (
+                  <div key={exp.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${exp.scope === 'shared' ? 'bg-indigo-100 text-indigo-700' : 'bg-violet-100 text-violet-700'}`}>
+                        {exp.scope === 'shared' ? <Users className="h-4 w-4" /> : <User className="h-4 w-4" />}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-700">{exp.description}</p>
+                        <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                          <Clock className="h-3 w-3" />
+                          {fmtTime(exp.date)}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="font-mono font-bold text-red-600">
+                      -${exp.amount.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

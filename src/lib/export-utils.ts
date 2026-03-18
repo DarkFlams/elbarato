@@ -256,7 +256,25 @@ export interface SaleExportData {
   total: number;
 }
 
-export async function exportSalesToExcel(sales: SaleExportData[], filename?: string) {
+export interface LiquidationExpense {
+  description: string;
+  amount: number;
+  date: string;
+}
+
+export interface LiquidationData {
+  totalSales: number;
+  totalExpenses: number;
+  netIncome: number;
+  partnerName: string;
+  expensesDetail: LiquidationExpense[];
+}
+
+export async function exportSalesToExcel(
+  sales: SaleExportData[], 
+  liquidation: LiquidationData,
+  filename?: string
+) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Ventas", {
     views: [{ showGridLines: false }]
@@ -283,26 +301,44 @@ export async function exportSalesToExcel(sales: SaleExportData[], filename?: str
   titleCell.alignment = { vertical: "middle", horizontal: "center" };
   sheet.getRow(1).height = 30;
 
-  // METADATOS
+  // METADATOS Y LIQUIDACIÓN
   sheet.getCell("A3").value = "Generado el:";
   sheet.getCell("A3").font = { bold: true, color: { argb: "FF475569" } };
   sheet.getCell("B3").value = new Date().toLocaleString("es-EC");
 
-  sheet.getCell("A4").value = "Total de Tickets:";
+  sheet.getCell("A4").value = "Filtro Aplicado:";
   sheet.getCell("A4").font = { bold: true, color: { argb: "FF475569" } };
-  sheet.getCell("B4").value = sales.length;
+  sheet.getCell("B4").value = liquidation.partnerName;
 
-  const totalAmount = sales.reduce((sum, s) => sum + s.total, 0);
-  sheet.getCell("A5").value = "Recaudación Total:";
+  sheet.getCell("A5").value = "Total de Tickets:";
   sheet.getCell("A5").font = { bold: true, color: { argb: "FF475569" } };
-  sheet.getCell("B5").value = totalAmount;
-  sheet.getCell("B5").numFmt = '"$"#,##0.00';
-  sheet.getCell("B5").font = { bold: true, color: { argb: "FF16A34A" } }; // Green 600
+  sheet.getCell("B5").value = sales.length;
+
+  // Cuadro de Resumen Financiero
+  sheet.getCell("D3").value = "RESUMEN DE LIQUIDACIÓN";
+  sheet.getCell("D3").font = { bold: true, size: 11, color: { argb: "FF0F172A" } };
+
+  sheet.getCell("D4").value = "Ventas Brutas:";
+  sheet.getCell("D4").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("E4").value = liquidation.totalSales;
+  sheet.getCell("E4").numFmt = '"$"#,##0.00';
+
+  sheet.getCell("D5").value = "Gastos Deducidos:";
+  sheet.getCell("D5").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("E5").value = liquidation.totalExpenses;
+  sheet.getCell("E5").numFmt = '"-$"#,##0.00';
+  sheet.getCell("E5").font = { color: { argb: "FFDC2626" }, bold: true };
+
+  sheet.getCell("D6").value = "Liquidación Neta:";
+  sheet.getCell("D6").font = { bold: true, color: { argb: "FF475569" } };
+  sheet.getCell("E6").value = liquidation.netIncome;
+  sheet.getCell("E6").numFmt = '"$"#,##0.00';
+  sheet.getCell("E6").font = { bold: true, color: { argb: "FF16A34A" }, size: 12 };
 
   // ===================================
   // CABECERA DE LA TABLA
   // ===================================
-  const headerRow = sheet.getRow(7);
+  const headerRow = sheet.getRow(8);
   headerRow.values = [
     "TICKET #",
     "FECHA",
@@ -329,7 +365,7 @@ export async function exportSalesToExcel(sales: SaleExportData[], filename?: str
   // ===================================
   // DATOS
   // ===================================
-  let currentRow = 8;
+  let currentRow = 9;
   sales.forEach((s, index) => {
     const row = sheet.getRow(currentRow);
     row.values = {
@@ -375,8 +411,8 @@ export async function exportSalesToExcel(sales: SaleExportData[], filename?: str
   // ===================================
   const tableTotalRow = sheet.getRow(currentRow);
   tableTotalRow.values = {
-    method: "TOTAL FINAL:",
-    total: totalAmount
+    method: "SUBTOTAL BRUTO:",
+    total: liquidation.totalSales
   };
   tableTotalRow.height = 25;
 
@@ -404,6 +440,61 @@ export async function exportSalesToExcel(sales: SaleExportData[], filename?: str
   });
 
   // ===================================
+  // DETALLE DE GASTOS DEDUCIDOS
+  // ===================================
+  if (liquidation.expensesDetail && liquidation.expensesDetail.length > 0) {
+    currentRow += 3;
+    
+    const expTitleRow = sheet.getRow(currentRow);
+    expTitleRow.getCell("D").value = "DETALLE DE GASTOS DEDUCIDOS";
+    expTitleRow.getCell("D").font = { bold: true, size: 11, color: { argb: "FF0F172A" } };
+    currentRow++;
+
+    const expHeaderRow = sheet.getRow(currentRow);
+    expHeaderRow.getCell("F").value = "DESCRIPCIÓN DEL GASTO";
+    expHeaderRow.getCell("G").value = "MONTO ($)";
+    expHeaderRow.height = 20;
+    
+    expHeaderRow.getCell("F").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } }; // Red 50
+    expHeaderRow.getCell("G").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+    expHeaderRow.getCell("F").font = { bold: true, color: { argb: "FF991B1B" } };
+    expHeaderRow.getCell("G").font = { bold: true, color: { argb: "FF991B1B" } };
+    expHeaderRow.getCell("F").alignment = { vertical: "middle", horizontal: "left" };
+    expHeaderRow.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+    
+    currentRow++;
+
+    liquidation.expensesDetail.forEach(exp => {
+      const row = sheet.getRow(currentRow);
+      row.getCell("F").value = exp.description;
+      row.getCell("G").value = exp.amount;
+      row.getCell("G").numFmt = '"-$"#,##0.00';
+      
+      row.getCell("F").alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      row.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+      row.getCell("G").font = { color: { argb: "FFDC2626" } };
+      
+      row.getCell("F").border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
+      row.getCell("G").border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
+      
+      currentRow++;
+    });
+
+    const expTotalRow = sheet.getRow(currentRow);
+    expTotalRow.getCell("F").value = "TOTAL GASTOS:";
+    expTotalRow.getCell("G").value = liquidation.totalExpenses;
+    expTotalRow.getCell("G").numFmt = '"-$"#,##0.00';
+    
+    expTotalRow.getCell("F").font = { bold: true, color: { argb: "FF0F172A" } };
+    expTotalRow.getCell("G").font = { bold: true, color: { argb: "FFDC2626" } };
+    expTotalRow.getCell("F").alignment = { vertical: "middle", horizontal: "right" };
+    expTotalRow.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+    
+    expTotalRow.getCell("F").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+    expTotalRow.getCell("G").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+  }
+
+  // ===================================
   // DESCARGA
   // ===================================
   const buffer = await workbook.xlsx.writeBuffer();
@@ -412,7 +503,7 @@ export async function exportSalesToExcel(sales: SaleExportData[], filename?: str
   saveAs(blob, fname);
 }
 
-export function exportSalesToPdf(sales: SaleExportData[], filename?: string) {
+export function exportSalesToPdf(sales: SaleExportData[], liquidation: LiquidationData, filename?: string) {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -423,13 +514,19 @@ export function exportSalesToPdf(sales: SaleExportData[], filename?: string) {
 
   doc.setFontSize(10);
   doc.setTextColor(100);
-  doc.text(`Generado: ${new Date().toLocaleString("es-EC")}`, 14, 30);
-  doc.text(`Total tickets: ${sales.length}`, 14, 35);
+  doc.text(`Filtro: ${liquidation.partnerName}`, 14, 28);
+  doc.text(`Generado: ${new Date().toLocaleString("es-EC")}`, 14, 34);
+  doc.text(`Total tickets: ${sales.length}`, 14, 40);
 
-  const totalAmount = sales.reduce((sum, s) => sum + s.total, 0);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(30);
-  doc.text(`VENTAS TOTALES: $${totalAmount.toFixed(2)}`, pageWidth - 14, 35, { align: "right" });
+  doc.text(`VENTAS BRUTAS: $${liquidation.totalSales.toFixed(2)}`, pageWidth - 14, 28, { align: "right" });
+  
+  doc.setTextColor(220, 38, 38); // Red
+  doc.text(`GASTOS DEDUCIDOS: -$${liquidation.totalExpenses.toFixed(2)}`, pageWidth - 14, 34, { align: "right" });
+  
+  doc.setTextColor(22, 163, 74); // Green
+  doc.text(`LIQUIDACIÓN NETA: $${liquidation.netIncome.toFixed(2)}`, pageWidth - 14, 40, { align: "right" });
 
   const tableBody = sales.map((s) => [
     s.id.toUpperCase().slice(0, 8),
@@ -443,17 +540,17 @@ export function exportSalesToPdf(sales: SaleExportData[], filename?: string) {
 
   // Add total row to table body
   tableBody.push([
-    "TOTAL",
+    "SUBTOTAL BRUTO",
     "",
     "",
     "",
     "",
     "",
-    `$${totalAmount.toFixed(2)}`,
+    `$${liquidation.totalSales.toFixed(2)}`,
   ]);
 
   autoTable(doc, {
-    startY: 45,
+    startY: 48,
     head: [["ID", "Fecha", "Hora", "Socia", "Productos", "Pago", "Total"]],
     body: tableBody,
     theme: "grid",
@@ -476,6 +573,52 @@ export function exportSalesToPdf(sales: SaleExportData[], filename?: string) {
       }
     },
   });
+
+  if (liquidation.expensesDetail && liquidation.expensesDetail.length > 0) {
+    const finalY = (doc as any).lastAutoTable.finalY + 15;
+    
+    doc.setFontSize(12);
+    doc.setTextColor(30);
+    doc.text("Detalle de Gastos Deducidos", 14, finalY);
+
+    const expBody = liquidation.expensesDetail.map(exp => [
+      new Date(exp.date).toLocaleDateString("es-EC") + " " + new Date(exp.date).toLocaleTimeString("es-EC", { hour: '2-digit', minute: '2-digit' }),
+      exp.description,
+      `-$${exp.amount.toFixed(2)}`
+    ]);
+
+    // Fila total gastos
+    expBody.push([
+      "",
+      "TOTAL GASTOS",
+      `-$${liquidation.totalExpenses.toFixed(2)}`
+    ]);
+
+    autoTable(doc, {
+      startY: finalY + 5,
+      head: [["Fecha y Hora", "Descripción del Gasto", "Monto a Deducir"]],
+      body: expBody,
+      theme: "grid",
+      headStyles: {
+        fillColor: [220, 38, 38], // Red 600
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+      },
+      styles: {
+        fontSize: 8,
+        cellPadding: 3,
+      },
+      columnStyles: {
+        2: { halign: "right", textColor: [220, 38, 38] },
+      },
+      didParseCell: (data) => {
+        if (data.row.index === expBody.length - 1) {
+          data.cell.styles.fontStyle = "bold";
+          data.cell.styles.fillColor = [254, 242, 242]; // Red 50
+        }
+      },
+    });
+  }
 
   const fname = filename || `Ventas_${new Date().toISOString().split("T")[0]}.pdf`;
   doc.save(fname);
