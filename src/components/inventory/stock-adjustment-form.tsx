@@ -62,7 +62,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductForAdjustment | null>(null);
   const [operation, setOperation] = useState<MovementOperation>("in");
-  const [quantity, setQuantity] = useState("1");
+  const [quantity, setQuantity] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,7 +177,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
       return;
     }
 
-    const qty = parseInt(quantity, 10);
+    const qty = parseInt(quantity || "1", 10);
     if (!Number.isFinite(qty) || qty <= 0) {
       toast.error("Cantidad invalida");
       return;
@@ -213,7 +213,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
         }
       );
 
-      setQuantity("1");
+      setQuantity("");
       await refreshSelectedProduct(selectedProduct.id);
       onAdjusted?.();
     } catch (err) {
@@ -402,7 +402,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
             min="1"
             value={quantity}
             onChange={(event) => setQuantity(event.target.value)}
-            placeholder="1"
+            placeholder="Ej: 5"
             className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
           />
         </div>

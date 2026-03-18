@@ -40,13 +40,7 @@ export const useCart = create<CartState>((set, get) => ({
   amountReceived: "",
 
   addItem: (product: ProductWithOwner) => {
-    if (product.stock <= 0) {
-      return {
-        ok: false,
-        reason: "out_of_stock",
-        availableStock: product.stock,
-      };
-    }
+    // Allow putting items without stock to continue with the process.
 
     let result: CartMutationResult = {
       ok: true,
@@ -61,15 +55,6 @@ export const useCart = create<CartState>((set, get) => ({
       if (existingIndex >= 0) {
         const updated = [...state.items];
         const item = { ...updated[existingIndex] };
-
-        if (item.quantity >= item.available_stock) {
-          result = {
-            ok: false,
-            reason: "quantity_limit",
-            availableStock: item.available_stock,
-          };
-          return { items: state.items };
-        }
 
         item.quantity += 1;
         item.available_stock = product.stock;
@@ -117,13 +102,8 @@ export const useCart = create<CartState>((set, get) => ({
       return { ok: false, reason: "not_found" };
     }
 
-    if (quantity > existingItem.available_stock) {
-      return {
-        ok: false,
-        reason: "quantity_limit",
-        availableStock: existingItem.available_stock,
-      };
-    }
+    // Removed available_stock quantity limitation check to allow selling items even if out of stock
+
 
     set((state) => ({
       items: state.items.map((item) =>

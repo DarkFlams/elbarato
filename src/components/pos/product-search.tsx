@@ -34,7 +34,10 @@ export function ProductSearch() {
       setIsSearching(true);
       try {
         const supabase = createClient();
-        const { data, error } = await supabase
+        const trimmed = query.trim();
+        const tokens = trimmed.split(/\s+/).filter(Boolean);
+
+        let qb = supabase
           .from("products")
           .select(
             `
@@ -44,14 +47,49 @@ export function ProductSearch() {
             )
           `
           )
-          .eq("is_active", true)
-          .or(`name.ilike.%${query}%,barcode.ilike.%${query}%,sku.ilike.%${query}%`)
-          .order("name")
-          .limit(8);
+          .eq("is_active", true);
+
+        // Each token must appear somewhere in name (AND logic)
+        // e.g. "cam alg c/v" → name ILIKE '%cam%' AND name ILIKE '%alg%' AND name ILIKE '%c/v%'
+        for (const token of tokens) {
+          qb = qb.ilike("name", `%${token}%`);
+        }
+
+        // Also search by exact barcode/sku if it's a single token (could be scanning)
+        let barcodeResults: ProductWithOwner[] = [];
+        if (tokens.length === 1) {
+          const { data: bcData } = await supabase
+            .from("products")
+            .select(
+              `
+              *,
+              owner:partners!products_owner_id_fkey (
+                id, name, display_name, color_hex
+              )
+            `
+            )
+            .eq("is_active", true)
+            .or(`barcode.ilike.%${trimmed}%,sku.ilike.%${trimmed}%`)
+            .limit(4);
+          barcodeResults = (bcData as unknown as ProductWithOwner[]) || [];
+        }
+
+        const { data, error } = await qb.order("name").limit(8);
 
         if (error) throw error;
 
-        setResults((data as unknown as ProductWithOwner[]) || []);
+        // Merge name results + barcode results, deduplicate by id
+        const nameResults = (data as unknown as ProductWithOwner[]) || [];
+        const seen = new Set(nameResults.map((p) => p.id));
+        const merged = [...nameResults];
+        for (const bp of barcodeResults) {
+          if (!seen.has(bp.id)) {
+            merged.push(bp);
+            seen.add(bp.id);
+          }
+        }
+
+        setResults(merged);
         setIsOpen(true);
       } catch (err) {
         console.error("[ProductSearch] search error:", err);
@@ -78,29 +116,35 @@ export function ProductSearch() {
   }, []);
 
   const handleSelect = (product: ProductWithOwner) => {
-    if (product.stock <= 0) {
-      toast.error(`${product.name} sin stock`, {
-        description: "No se puede agregar al carrito",
-      });
-      return;
-    }
-
     const result = addItem(product);
     if (!result.ok) {
       toast.warning(`No puedes agregar mas de ${product.name}`, {
-        description: `Stock disponible: ${result.availableStock ?? product.stock}`,
+        description: `Error: ${result.reason}`,
       });
       return;
     }
 
     playSuccessSound();
-    // NOTE: clearance_price/REMATE logic hidden. See docs/ropa-vieja.md
-    toast.success(`${product.name} agregado`, {
-      description: `${product.owner.display_name} - $${product.sale_price.toFixed(2)}`,
-    });
+    
+    if (product.stock <= 0) {
+      toast.warning(`${product.name} agregado sin stock`, {
+        description: `${product.owner.display_name} - Se descontará en negativo.`,
+      });
+    } else {
+      toast.success(`${product.name} agregado`, {
+        description: `${product.owner.display_name} - $${product.sale_price.toFixed(2)}`,
+      });
+    }
     setQuery("");
     setIsOpen(false);
     inputRef.current?.blur();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && results.length === 1 && !isSearching) {
+      e.preventDefault();
+      handleSelect(results[0]);
+    }
   };
 
   return (
@@ -111,6 +155,7 @@ export function ProductSearch() {
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder="Buscar producto por nombre o codigo..."
           className="pl-9 pr-8 h-11 bg-white border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20 transition-colors shadow-sm"
         />
@@ -137,8 +182,7 @@ export function ProductSearch() {
             <button
               key={product.id}
               onClick={() => handleSelect(product)}
-              disabled={product.stock <= 0}
-              className="flex items-center w-full px-3 py-2.5 text-left hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center w-full px-3 py-2.5 text-left hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0"
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate text-slate-900">{product.name}</p>

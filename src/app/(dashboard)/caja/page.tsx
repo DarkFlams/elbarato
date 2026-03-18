@@ -82,24 +82,21 @@ export default function CajaPage() {
 
         const product = data as unknown as ProductWithOwner;
 
-        if (product.stock <= 0) {
-          playErrorSound();
-          toast.error(`${product.name} sin stock`, {
-            description: `Stock actual: ${product.stock}`,
-          });
-          return;
-        }
-
         const result = addItem(product);
         if (!result.ok) {
           playErrorSound();
           toast.warning(`No puedes agregar más de ${product.name}`, {
-            description: `Stock disponible: ${result.availableStock ?? product.stock}`,
+            description: `Error: ${result.reason}`,
           });
           return;
         }
 
         playSuccessSound();
+        if (product.stock <= 0) {
+          toast.warning(`${product.name} agregado sin stock`, {
+            description: `Se venderá en negativo.`,
+          });
+        }
       } catch (err) {
         console.error("[CajaPage] scan error:", err);
         toast.error("Error al buscar producto");
@@ -111,13 +108,13 @@ export default function CajaPage() {
   useBarcodeScanner({ onScan: handleScan, enabled: true });
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] gap-4 relative">
+    <div className="flex flex-col h-full gap-4 relative min-h-0">
       <OpenSessionModal />
 
       <div className="flex-1 flex flex-col lg:flex-row gap-5 min-h-0 w-full overflow-hidden">
 
         {/* BLOQUE IZQUIERDO: Buscador + Carrito Unificado */}
-        <div className="flex-1 flex flex-col gap-4 min-h-0 min-w-[500px]">
+        <div className="flex-1 flex flex-col gap-4 min-h-0 min-w-0 lg:min-w-[400px]">
 
           {/* Barra de búsqueda */}
           <div className="flex items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm shrink-0">
@@ -156,11 +153,11 @@ export default function CajaPage() {
           </div>
 
           {/* PANEL INFERIOR: Observaciones y Calculadora */}
-          <div className="flex flex-row gap-4 shrink-0 h-[100px]">
+          <div className="flex flex-row gap-4 shrink-0">
             {/* Tarjeta de Observaciones */}
-            <div className="flex-1 bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2">
-              <Label htmlFor="notes" className="text-slate-500 font-semibold flex items-center gap-2 text-xs uppercase tracking-wide">
-                <PenLine className="h-3.5 w-3.5" />
+            <div className="flex-1 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-1.5">
+              <Label htmlFor="notes" className="text-slate-500 font-semibold flex items-center gap-2 text-[11px] uppercase tracking-wide">
+                <PenLine className="h-3 w-3" />
                 Observaciones
               </Label>
               <Textarea
@@ -174,22 +171,22 @@ export default function CajaPage() {
             </div>
 
             {/* Tarjeta de Calculadora */}
-            <div className="w-[380px] shrink-0 bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="received" className="text-slate-500 font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wide">
+            <div className="w-[300px] xl:w-[320px] 2xl:w-[380px] shrink-0 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="received" className="text-slate-500 font-semibold flex items-center gap-1.5 text-[10px] sm:text-[11px] uppercase tracking-wide whitespace-nowrap">
                     <Banknote className="h-3.5 w-3.5 text-emerald-600" />
                     Efectivo Recibido
                   </Label>
                   <div className="relative">
-                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600 font-bold" />
+                    <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600 font-bold" />
                     <Input
                       id="received"
                       type="number"
                       min="0"
                       step="0.01"
                       placeholder="0.00"
-                      className="pl-8 h-12 text-xl font-bold font-mono border-emerald-200 bg-emerald-50/50 text-emerald-900 focus-visible:ring-emerald-500/40 shadow-inner"
+                      className="pl-7 h-10 text-lg font-bold font-mono border-emerald-200 bg-emerald-50/50 text-emerald-900 focus-visible:ring-emerald-500/40 shadow-inner"
                       value={amountReceived}
                       onChange={(e) => setAmountReceived(e.target.value)}
                       disabled={isProcessing}
@@ -197,11 +194,11 @@ export default function CajaPage() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label className="text-slate-500 font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wide">
+                <div className="space-y-1">
+                  <Label className="text-slate-500 font-semibold flex items-center gap-1.5 text-[10px] sm:text-[11px] uppercase tracking-wide whitespace-nowrap">
                     Cambio a Entregar
                   </Label>
-                  <div className={`flex items-center h-12 px-3 rounded-md border text-xl font-bold font-mono transition-colors shadow-inner ${
+                  <div className={`flex items-center h-10 px-3 rounded-md border text-lg font-bold font-mono transition-colors shadow-inner ${
                     Number(amountReceived) >= total && Number(amountReceived) > 0
                       ? "bg-slate-800 border-slate-900 text-white shadow-slate-900/20"
                       : "bg-slate-50 border-slate-200 text-slate-400"
@@ -219,7 +216,7 @@ export default function CajaPage() {
         </div>
 
         {/* BLOQUE DERECHO: Stats de sesión + Gastos del día */}
-        <div className="hidden lg:flex flex-col w-[380px] xl:w-[420px] shrink-0 gap-4 min-h-0">
+        <div className="hidden lg:flex flex-col w-[300px] xl:w-[320px] 2xl:w-[380px] shrink-0 gap-4 min-h-0">
           <SessionStats />
           <ExpensesPanel />
         </div>

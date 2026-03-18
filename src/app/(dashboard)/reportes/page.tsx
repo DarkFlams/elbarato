@@ -221,7 +221,7 @@ export default function ReportesPage() {
   const hasFilters = Boolean(fromDate || toDate);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] gap-4">
+    <div className="flex flex-col h-full gap-4">
       <div className="space-y-3">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2 text-slate-900">

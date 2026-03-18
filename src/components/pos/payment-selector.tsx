@@ -40,13 +40,13 @@ export function PaymentSelector() {
             key={option.value}
             onClick={() => setPaymentMethod(option.value)}
             className={cn(
-              "flex flex-col items-center justify-center gap-2 px-3 py-4 rounded-xl border text-sm font-semibold transition-all duration-200",
+              "flex flex-row items-center justify-center gap-2 px-2 py-2 rounded-lg border text-sm font-semibold transition-all duration-200",
               isSelected
                 ? selectedClass
                 : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700"
             )}
           >
-            <Icon className="h-6 w-6" />
+            <Icon className="h-5 w-5" />
             {option.label}
           </button>
         );

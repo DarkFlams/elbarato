@@ -17,7 +17,7 @@
 
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +52,22 @@ export function SaleTicket({
   date,
 }: SaleTicketProps) {
   const ticketRef = useRef<HTMLDivElement>(null);
+  const hasPrintedRef = useRef(false);
+
+  // Auto-print when the dialog opens after a sale
+  useEffect(() => {
+    if (open && !hasPrintedRef.current) {
+      hasPrintedRef.current = true;
+      // Small delay to let dialog render before triggering print
+      const timer = setTimeout(() => {
+        handlePrint();
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+    if (!open) {
+      hasPrintedRef.current = false;
+    }
+  }, [open]);
 
   const formatDate = (d: Date) =>
     d.toLocaleDateString("es-EC", {

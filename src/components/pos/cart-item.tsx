@@ -20,18 +20,13 @@ interface CartItemProps {
 
 export function CartItemRow({ item, index }: CartItemProps) {
   const { updateQuantity, removeItem, updatePrice } = useCart();
-  const reachedStockLimit = item.quantity >= item.available_stock;
+  const isOutOfStock = item.quantity > item.available_stock;
   const [editingPrice, setEditingPrice] = useState(false);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleIncrease = () => {
-    const result = updateQuantity(item.product_id, item.quantity + 1);
-    if (!result.ok && result.reason === "quantity_limit") {
-      toast.warning(`Máximo disponible: ${result.availableStock ?? item.available_stock}`, {
-        description: item.name,
-      });
-    }
+    updateQuantity(item.product_id, item.quantity + 1);
   };
 
   const startEditing = () => {
@@ -84,6 +79,11 @@ export function CartItemRow({ item, index }: CartItemProps) {
       <div className="flex-1 min-w-0">
         <p className="text-base font-bold truncate text-slate-800 leading-tight">
           {item.name}
+          {isOutOfStock && (
+            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 uppercase tracking-wider align-middle" title="Se venderá en negativo">
+              Sin stock
+            </span>
+          )}
         </p>
         <p className="text-xs text-slate-400 mt-0.5 font-mono">
           ${item.price_override.toFixed(2)} c/u
@@ -110,7 +110,6 @@ export function CartItemRow({ item, index }: CartItemProps) {
           size="icon"
           className="h-7 w-7 rounded-md hover:bg-white text-slate-600 shadow-none disabled:opacity-40"
           onClick={handleIncrease}
-          disabled={reachedStockLimit}
         >
           <Plus className="h-3.5 w-3.5" />
         </Button>

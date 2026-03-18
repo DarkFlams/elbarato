@@ -57,7 +57,7 @@ export default function GastosPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] gap-4">
+    <div className="flex flex-col h-full gap-4">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

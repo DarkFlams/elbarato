@@ -451,47 +451,60 @@ export async function exportSalesToExcel(
     currentRow++;
 
     const expHeaderRow = sheet.getRow(currentRow);
-    expHeaderRow.getCell("F").value = "DESCRIPCIÓN DEL GASTO";
+    expHeaderRow.getCell("D").value = "DESCRIPCIÓN DEL GASTO";
+    sheet.mergeCells(`D${currentRow}:F${currentRow}`);
     expHeaderRow.getCell("G").value = "MONTO ($)";
     expHeaderRow.height = 20;
     
-    expHeaderRow.getCell("F").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } }; // Red 50
+    ["D", "E", "F"].forEach(col => {
+      expHeaderRow.getCell(col).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+      expHeaderRow.getCell(col).font = { bold: true, color: { argb: "FF991B1B" } };
+      expHeaderRow.getCell(col).border = { bottom: { style: "thin", color: { argb: "FFFCA5A5" } } };
+    });
+    expHeaderRow.getCell("D").alignment = { vertical: "middle", horizontal: "left" };
+    
     expHeaderRow.getCell("G").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
-    expHeaderRow.getCell("F").font = { bold: true, color: { argb: "FF991B1B" } };
     expHeaderRow.getCell("G").font = { bold: true, color: { argb: "FF991B1B" } };
-    expHeaderRow.getCell("F").alignment = { vertical: "middle", horizontal: "left" };
     expHeaderRow.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+    expHeaderRow.getCell("G").border = { bottom: { style: "thin", color: { argb: "FFFCA5A5" } } };
     
     currentRow++;
 
     liquidation.expensesDetail.forEach(exp => {
       const row = sheet.getRow(currentRow);
-      row.getCell("F").value = exp.description;
+      row.getCell("D").value = exp.description;
+      sheet.mergeCells(`D${currentRow}:F${currentRow}`);
       row.getCell("G").value = exp.amount;
       row.getCell("G").numFmt = '"-$"#,##0.00';
       
-      row.getCell("F").alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      row.getCell("D").alignment = { vertical: "middle", horizontal: "left", wrapText: true };
       row.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
       row.getCell("G").font = { color: { argb: "FFDC2626" } };
       
-      row.getCell("F").border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
-      row.getCell("G").border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
+      ["D", "E", "F", "G"].forEach(col => {
+        row.getCell(col).border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
+      });
       
       currentRow++;
     });
 
     const expTotalRow = sheet.getRow(currentRow);
-    expTotalRow.getCell("F").value = "TOTAL GASTOS:";
+    expTotalRow.getCell("D").value = "TOTAL GASTOS:";
+    sheet.mergeCells(`D${currentRow}:F${currentRow}`);
     expTotalRow.getCell("G").value = liquidation.totalExpenses;
     expTotalRow.getCell("G").numFmt = '"-$"#,##0.00';
     
-    expTotalRow.getCell("F").font = { bold: true, color: { argb: "FF0F172A" } };
-    expTotalRow.getCell("G").font = { bold: true, color: { argb: "FFDC2626" } };
-    expTotalRow.getCell("F").alignment = { vertical: "middle", horizontal: "right" };
-    expTotalRow.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+    ["D", "E", "F"].forEach(col => {
+      expTotalRow.getCell(col).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      expTotalRow.getCell(col).font = { bold: true, color: { argb: "FF0F172A" } };
+      expTotalRow.getCell(col).border = { top: { style: "medium", color: { argb: "FF94A3B8" } } };
+    });
+    expTotalRow.getCell("D").alignment = { vertical: "middle", horizontal: "right" };
     
-    expTotalRow.getCell("F").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
     expTotalRow.getCell("G").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+    expTotalRow.getCell("G").font = { bold: true, color: { argb: "FFDC2626" } };
+    expTotalRow.getCell("G").alignment = { vertical: "middle", horizontal: "right" };
+    expTotalRow.getCell("G").border = { top: { style: "medium", color: { argb: "FF94A3B8" } } };
   }
 
   // ===================================
