@@ -100,7 +100,8 @@ export function ProductTable({
       }
 
       if (debouncedSearch.trim()) {
-        const term = `%${debouncedSearch.trim()}%`;
+        const safeSearch = debouncedSearch.trim().replace(/[,"]/g, " ");
+        const term = `%${safeSearch}%`;
         q = q.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
       }
 
@@ -151,7 +152,8 @@ export function ProductTable({
           .eq("is_active", true);
         if (filterOwner) q = q.eq("owner_id", filterOwner);
         if (debouncedSearch.trim()) {
-          const term = `%${debouncedSearch.trim()}%`;
+          const safeSearch = debouncedSearch.trim().replace(/[,"]/g, " ");
+          const term = `%${safeSearch}%`;
           q = q.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
         }
         return q;

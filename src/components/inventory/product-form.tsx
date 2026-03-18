@@ -6,7 +6,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Plus, Save, Loader2, Package, Ruler, ScanLine } from "lucide-react";
+import { Plus, Save, Loader2, Package, ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,9 +37,45 @@ interface ProductFormProps {
 
 const SIZE_SPLIT_REGEX = /[\s,;/|]+/g;
 
-function generateInternalBarcode(): string {
-  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `INT-${random}`;
+async function generateUniqueBarcode(): Promise<string> {
+  const supabase = createClient();
+  // Find the highest ELB- barcode to continue the sequence
+  const { data } = await supabase
+    .from("products")
+    .select("barcode")
+    .ilike("barcode", "ELB-%")
+    .order("barcode", { ascending: false })
+    .limit(1);
+
+  let nextNum = 1;
+  if (data && data.length > 0) {
+    const match = data[0].barcode.match(/ELB-(\d+)/);
+    if (match) nextNum = parseInt(match[1], 10) + 1;
+  }
+
+  // Also check total count to avoid any gap collision
+  const { count } = await supabase
+    .from("products")
+    .select("*", { count: "exact", head: true });
+
+  if (count && count >= nextNum) nextNum = count + 1;
+
+  return `ELB-${String(nextNum).padStart(5, "0")}`;
+}
+
+async function isSkuTaken(skuValue: string, excludeProductId?: string): Promise<boolean> {
+  const supabase = createClient();
+  let q = supabase
+    .from("products")
+    .select("id", { count: "exact", head: true })
+    .eq("sku", skuValue);
+
+  if (excludeProductId) {
+    q = q.neq("id", excludeProductId);
+  }
+
+  const { count } = await q;
+  return (count ?? 0) > 0;
 }
 
 function normalizeSizeToken(token: string): string {
@@ -104,7 +140,7 @@ export function ProductForm({
       setSalePrice(String(product.sale_price));
       setStock(String(product.stock));
       setMinStock(String(product.min_stock));
-      setSizesText(parsedSizes.join(" "));
+      setSizesText(parsedSizes.join(" ")); // keep for backward compat
     } else if (!product && open) {
       resetForm();
     }
@@ -128,12 +164,6 @@ export function ProductForm({
     }
 
     const parsedSizes = parseSizesInput(sizesText);
-    if (parsedSizes.length === 0) {
-      toast.error("Ingresa al menos una talla", {
-        description: "Ejemplo: S M L o 16 20 46",
-      });
-      return;
-    }
 
     if (!ownerId) {
       toast.error("Selecciona la socia duena");
@@ -148,10 +178,24 @@ export function ProductForm({
     setIsSubmitting(true);
 
     try {
+      // Validate SKU uniqueness if provided
+      const trimmedSku = sku.trim();
+      if (trimmedSku) {
+        const taken = await isSkuTaken(trimmedSku, isEditing && product ? product.id : undefined);
+        if (taken) {
+          toast.error("Ese SKU ya existe", {
+            description: `El codigo "${trimmedSku}" ya esta asignado a otro producto.`,
+          });
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       const supabase = createClient();
       const nextStock = parseInt(stock, 10) || 0;
-      const finalBarcode = barcode.trim() || generateInternalBarcode();
-      const finalDescription = `Tallas: ${parsedSizes.join(", ")}`;
+      // For new products, auto-generate. For editing, keep existing.
+      const finalBarcode = isEditing ? barcode : await generateUniqueBarcode();
+      const finalDescription = parsedSizes.length > 0 ? `Tallas: ${parsedSizes.join(", ")}` : null;
 
       const { data, error } = await supabase.rpc("upsert_product_with_movement", {
         p_product_id: isEditing && product ? product.id : null,
@@ -165,7 +209,7 @@ export function ProductForm({
         p_stock: nextStock,
         p_min_stock: parseInt(minStock, 10) || 0,
         p_is_active: true,
-        p_sku: sku.trim() || null,
+        p_sku: trimmedSku || null,
       });
 
       if (error) throw error;
@@ -204,12 +248,9 @@ export function ProductForm({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {trigger ? (
-        <DialogTrigger nativeButton={false} render={<span />}>
-          {trigger}
-        </DialogTrigger>
+        <DialogTrigger render={trigger as React.ReactElement} />
       ) : (
         <DialogTrigger
-          nativeButton={false}
           render={
             <Button className="border-0 bg-slate-900 text-white shadow-md shadow-slate-900/10 transition-all duration-200 hover:bg-slate-800" />
           }
@@ -228,46 +269,32 @@ export function ProductForm({
             {isEditing ? "Editar prenda" : "Nueva prenda"}
           </DialogTitle>
           <DialogDescription>
-            Captura lo minimo para trabajar rapido: codigo, nombre, tallas,
-            socia, precio y stock.
+            Codigo, nombre, socia, precio y stock.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            Si la prenda ya tiene codigo impreso de Sheyla, escribelo aqui y se
-            conserva tal cual.
-          </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="prod-barcode" className="flex items-center gap-2">
-              <ScanLine className="h-4 w-4 text-slate-400" />
-              Codigo de barras
-              <span className="text-slate-400">(auto si vacio)</span>
-            </Label>
-            <Input
-              id="prod-barcode"
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              placeholder="Escanea o escribe el codigo existente"
-              className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="prod-sku" className="flex items-center gap-2">
-              <Package className="h-4 w-4 text-slate-400" />
-              Código interno (SKU)
-              <span className="text-slate-400">(Sheyla)</span>
-            </Label>
-            <Input
-              id="prod-sku"
-              value={sku}
-              onChange={(e) => setSku(e.target.value)}
-              placeholder="Ej: BEY12"
-              className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-            />
-          </div>
+          {isEditing && (
+            <div className="space-y-2">
+              <Label htmlFor="prod-barcode" className="flex items-center gap-2">
+                <ScanLine className="h-4 w-4 text-slate-400" />
+                Codigo de barras
+              </Label>
+              <Input
+                id="prod-barcode"
+                value={barcode}
+                readOnly
+                className="border-slate-200 bg-slate-50 font-mono shadow-sm text-slate-500 cursor-not-allowed"
+              />
+            </div>
+          )}
+          {!isEditing && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 flex items-center gap-2">
+              <ScanLine className="h-4 w-4" />
+              El codigo de barras se generara automaticamente al crear la prenda.
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="prod-name">Nombre de la prenda *</Label>
@@ -281,22 +308,20 @@ export function ProductForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="prod-sizes" className="flex items-center gap-2">
-              <Ruler className="h-4 w-4 text-slate-400" />
-              Tallas *
+            <Label htmlFor="prod-sku" className="flex items-center gap-2">
+              <Package className="h-4 w-4 text-slate-400" />
+              Código interno (SKU)
             </Label>
             <Input
-              id="prod-sizes"
-              value={sizesText}
-              onChange={(e) => setSizesText(e.target.value)}
-              placeholder="Escribe tallas: S M L o 16 20 46"
-              className="border-slate-200 bg-white shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
+              id="prod-sku"
+              value={sku}
+              onChange={(e) => setSku(e.target.value)}
+              placeholder="Ej: BEY12"
+              className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
             />
-            <p className="text-[11px] text-slate-500">
-              Usa espacio, coma o slash para separar tallas. Si es una sola,
-              escribela igual.
-            </p>
           </div>
+
+
 
           <div className="space-y-2">
             <Label>Socia *</Label>
@@ -332,12 +357,7 @@ export function ProductForm({
                     >
                       {getPartnerInitial(partner.display_name)}
                     </span>
-                    <span className="flex flex-col">
-                      <span className="font-medium">{partner.display_name}</span>
-                      <span className="text-[11px] opacity-75">
-                        Duena de la prenda
-                      </span>
-                    </span>
+                    <span className="font-medium">{partner.display_name}</span>
                   </button>
                 );
               })}

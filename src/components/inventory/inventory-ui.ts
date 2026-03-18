@@ -82,6 +82,10 @@ const MOVEMENT_VISUALS: Record<InventoryMovementReason, MovementVisual> = {
     iconClassName: "bg-indigo-100 text-indigo-700",
     badgeClassName: "border-indigo-200 bg-indigo-50 text-indigo-700",
   },
+  old_stock: {
+    iconClassName: "bg-red-100 text-red-700",
+    badgeClassName: "border-red-200 bg-red-50 text-red-700",
+  },
 };
 
 export function getPartnerVisual(name: string): PartnerVisual {
@@ -109,6 +113,9 @@ export function getStockVisual(stock: number, minStock: number): StockVisual {
   return STOCK_VISUALS[getStockTone(stock, minStock)];
 }
 
-export function getMovementVisual(reason: InventoryMovementReason): MovementVisual {
-  return MOVEMENT_VISUALS[reason];
+export function getMovementVisual(reason: string): MovementVisual {
+  return MOVEMENT_VISUALS[reason as InventoryMovementReason] || {
+    iconClassName: "bg-slate-100 text-slate-700",
+    badgeClassName: "border-slate-200 bg-slate-50 text-slate-700",
+  };
 }

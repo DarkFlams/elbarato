@@ -94,6 +94,7 @@ export function ProductSearch() {
     }
 
     playSuccessSound();
+    // NOTE: clearance_price/REMATE logic hidden. See docs/ropa-vieja.md
     toast.success(`${product.name} agregado`, {
       description: `${product.owner.display_name} - $${product.sale_price.toFixed(2)}`,
     });

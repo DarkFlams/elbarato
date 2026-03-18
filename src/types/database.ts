@@ -23,7 +23,8 @@ export type InventoryMovementReason =
   | "manual_adjustment"
   | "initial_stock"
   | "restock"
-  | "return";
+  | "return"
+  | "old_stock";
 
 // ============================================
 // TABLAS
@@ -53,6 +54,11 @@ export interface Product {
   min_stock: number;
   image_url: string | null;
   is_active: boolean;
+  is_clearance: boolean;
+  clearance_price: number | null;
+  bodega_at: string | null;
+  disposed_at: string | null;
+  bodega_stock: number;
   created_at: string;
   updated_at: string;
 }

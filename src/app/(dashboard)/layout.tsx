@@ -28,6 +28,7 @@ import {
   BarChart3,
   ClipboardCheck,
   LogOut,
+  Archive,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { APP_NAME } from "@/lib/constants";

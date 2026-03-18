@@ -71,6 +71,7 @@ export const useCart = create<CartState>((set, get) => ({
         return { items: updated };
       }
 
+      // NOTE: clearance_price logic hidden. See docs/ropa-vieja.md to reactivate.
       const newItem: CartItem = {
         product_id: product.id,
         barcode: product.barcode,

@@ -53,7 +53,7 @@ export default function CajaPage() {
             )
           `
           )
-          .eq("barcode", barcode)
+          .or(`barcode.eq.${barcode},sku.eq.${barcode}`)
           .eq("is_active", true)
           .maybeSingle();
 
