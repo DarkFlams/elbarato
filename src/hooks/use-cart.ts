@@ -14,23 +14,29 @@ import type {
 
 interface CartState {
   items: CartItem[];
-  paymentMethod: PaymentMethod;
+  paymentMethod: PaymentMethod | null;
   isProcessing: boolean;
   addItem: (product: ProductWithOwner) => CartMutationResult;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => CartMutationResult;
-  setPaymentMethod: (method: PaymentMethod) => void;
+  setPaymentMethod: (method: PaymentMethod | null) => void;
   clearCart: () => void;
   setProcessing: (value: boolean) => void;
   getTotal: () => number;
   getItemCount: () => number;
   getPartnerSummaries: () => PartnerSaleSummary[];
+  notes: string;
+  amountReceived: string;
+  setNotes: (notes: string) => void;
+  setAmountReceived: (amount: string) => void;
 }
 
 export const useCart = create<CartState>((set, get) => ({
   items: [],
-  paymentMethod: "cash",
+  paymentMethod: null,
   isProcessing: false,
+  notes: "",
+  amountReceived: "",
 
   addItem: (product: ProductWithOwner) => {
     if (product.stock <= 0) {
@@ -128,16 +134,24 @@ export const useCart = create<CartState>((set, get) => ({
     return { ok: true, availableStock: existingItem.available_stock };
   },
 
-  setPaymentMethod: (method: PaymentMethod) => {
+  setPaymentMethod: (method: PaymentMethod | null) => {
     set({ paymentMethod: method });
   },
 
   clearCart: () => {
-    set({ items: [], paymentMethod: "cash", isProcessing: false });
+    set({ items: [], paymentMethod: null, isProcessing: false, notes: "", amountReceived: "" });
   },
 
   setProcessing: (value: boolean) => {
     set({ isProcessing: value });
+  },
+
+  setNotes: (notes: string) => {
+    set({ notes });
+  },
+
+  setAmountReceived: (amount: string) => {
+    set({ amountReceived: amount });
   },
 
   getTotal: () => {

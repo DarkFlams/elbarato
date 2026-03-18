@@ -9,6 +9,7 @@ type AudioContextConstructor = typeof AudioContext;
 
 interface WindowWithWebkitAudio extends Window {
   webkitAudioContext?: AudioContextConstructor;
+  AudioContext?: AudioContextConstructor;
 }
 
 function createAudioContext() {

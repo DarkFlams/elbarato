@@ -29,18 +29,24 @@ export function PaymentSelector() {
         const isSelected = paymentMethod === option.value;
         const Icon = option.icon;
 
+        // Distinct colors for each payment method
+        const selectedClass =
+          option.value === "cash"
+            ? "border-emerald-600 bg-emerald-50 text-emerald-700 shadow-sm ring-1 ring-emerald-600/20"
+            : "border-sky-600 bg-sky-50 text-sky-700 shadow-sm ring-1 ring-sky-600/20";
+
         return (
           <button
             key={option.value}
             onClick={() => setPaymentMethod(option.value)}
             className={cn(
-              "flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-200",
+              "flex flex-col items-center justify-center gap-2 px-3 py-4 rounded-xl border text-sm font-semibold transition-all duration-200",
               isSelected
-                ? "border-indigo-600 bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-600/20"
+                ? selectedClass
                 : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700"
             )}
           >
-            <Icon className="h-4 w-4" />
+            <Icon className="h-6 w-6" />
             {option.label}
           </button>
         );

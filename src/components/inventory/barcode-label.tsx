@@ -39,9 +39,7 @@ export function BarcodeLabel({ product, open, onClose }: BarcodeLabelProps) {
 
     const generateBarcode = async () => {
       try {
-        // Dynamic import bwip-js (only on client)
-        const bwipjs = (await import("bwip-js")).default;
-
+        const bwipjs = require("bwip-js") as any;
         const canvas = canvasRef.current;
         if (!canvas) return;
 
