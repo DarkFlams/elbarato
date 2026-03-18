@@ -88,6 +88,10 @@ export interface Sale {
   sold_by: string | null;
   total: number;
   payment_method: PaymentMethod;
+  notes: string | null;
+  amount_received: number | null;
+  change_given: number | null;
+  idempotency_key: string | null;
   created_at: string;
   synced: boolean;
 }
@@ -113,6 +117,7 @@ export interface Expense {
   amount: number;
   description: string;
   scope: ExpenseScope;
+  idempotency_key: string | null;
   registered_by: string | null;
   created_at: string;
   synced: boolean;

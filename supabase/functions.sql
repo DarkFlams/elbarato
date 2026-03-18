@@ -3,6 +3,23 @@
 -- ============================================
 -- Estas funciones se llaman desde el frontend via supabase.rpc()
 
+-- ============================================
+-- HARDENING CONTABLE (idempotencia + columnas de checkout)
+-- ============================================
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_idempotency_key
+ON sales(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_expenses_idempotency_key
+ON expenses(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+
 /**
  * decrement_stock
  * Descuenta stock de un producto de forma atomica.
@@ -68,10 +85,18 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
  *   }
  * ]
  */
+DROP FUNCTION IF EXISTS register_sale(UUID, TEXT, JSONB);
+DROP FUNCTION IF EXISTS register_sale(UUID, TEXT, JSONB, TEXT, NUMERIC, NUMERIC);
+DROP FUNCTION IF EXISTS register_sale(UUID, TEXT, JSONB, TEXT, NUMERIC, NUMERIC, TEXT);
+
 CREATE OR REPLACE FUNCTION register_sale(
   p_cash_session_id UUID,
   p_payment_method TEXT,
-  p_items JSONB
+  p_items JSONB,
+  p_notes TEXT DEFAULT NULL,
+  p_amount_received NUMERIC(10,2) DEFAULT NULL,
+  p_change_given NUMERIC(10,2) DEFAULT NULL,
+  p_idempotency_key TEXT DEFAULT NULL
 )
 RETURNS TABLE (
   sale_id UUID,
@@ -86,6 +111,10 @@ DECLARE
   v_product RECORD;
   v_quantity INT;
   v_unit_price NUMERIC(10,2);
+  v_existing_sale_id UUID;
+  v_existing_total NUMERIC(10,2);
+  v_existing_item_count INT;
+  v_idempotency_key TEXT;
 BEGIN
   IF auth.role() IS DISTINCT FROM 'authenticated' THEN
     RAISE EXCEPTION 'Usuario no autenticado';
@@ -101,6 +130,37 @@ BEGIN
 
   IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
     RAISE EXCEPTION 'La venta debe incluir al menos un item';
+  END IF;
+
+  IF p_amount_received IS NOT NULL AND p_amount_received < 0 THEN
+    RAISE EXCEPTION 'Monto recibido invalido';
+  END IF;
+
+  IF p_change_given IS NOT NULL AND p_change_given < 0 THEN
+    RAISE EXCEPTION 'Cambio invalido';
+  END IF;
+
+  v_idempotency_key := NULLIF(trim(COALESCE(p_idempotency_key, '')), '');
+
+  IF v_idempotency_key IS NOT NULL THEN
+    SELECT
+      s.id,
+      s.total,
+      COALESCE(SUM(si.quantity), 0)::INT
+    INTO
+      v_existing_sale_id,
+      v_existing_total,
+      v_existing_item_count
+    FROM sales s
+    LEFT JOIN sale_items si ON si.sale_id = s.id
+    WHERE s.idempotency_key = v_idempotency_key
+    GROUP BY s.id, s.total;
+
+    IF FOUND THEN
+      RETURN QUERY
+      SELECT v_existing_sale_id, v_existing_total, v_existing_item_count;
+      RETURN;
+    END IF;
   END IF;
 
   IF NOT EXISTS (
@@ -155,21 +215,61 @@ BEGIN
     v_item_count := v_item_count + v_quantity;
   END LOOP;
 
-  INSERT INTO sales (
-    cash_session_id,
-    sold_by,
-    total,
-    payment_method,
-    synced
-  )
-  VALUES (
-    p_cash_session_id,
-    auth.uid(),
-    v_total,
-    p_payment_method,
-    true
-  )
-  RETURNING id INTO v_sale_id;
+  BEGIN
+    INSERT INTO sales (
+      cash_session_id,
+      sold_by,
+      total,
+      payment_method,
+      notes,
+      amount_received,
+      change_given,
+      synced,
+      idempotency_key
+    )
+    VALUES (
+      p_cash_session_id,
+      auth.uid(),
+      v_total,
+      p_payment_method,
+      NULLIF(trim(COALESCE(p_notes, '')), ''),
+      CASE
+        WHEN p_payment_method = 'cash' THEN ROUND(COALESCE(p_amount_received, 0), 2)
+        ELSE NULL
+      END,
+      CASE
+        WHEN p_payment_method = 'cash' THEN ROUND(COALESCE(p_change_given, 0), 2)
+        ELSE NULL
+      END,
+      true,
+      v_idempotency_key
+    )
+    RETURNING id INTO v_sale_id;
+  EXCEPTION
+    WHEN unique_violation THEN
+      IF v_idempotency_key IS NOT NULL THEN
+        SELECT
+          s.id,
+          s.total,
+          COALESCE(SUM(si.quantity), 0)::INT
+        INTO
+          v_existing_sale_id,
+          v_existing_total,
+          v_existing_item_count
+        FROM sales s
+        LEFT JOIN sale_items si ON si.sale_id = s.id
+        WHERE s.idempotency_key = v_idempotency_key
+        GROUP BY s.id, s.total;
+
+        IF FOUND THEN
+          RETURN QUERY
+          SELECT v_existing_sale_id, v_existing_total, v_existing_item_count;
+          RETURN;
+        END IF;
+      END IF;
+
+      RAISE;
+  END;
 
   FOR v_item IN
     SELECT value
@@ -236,6 +336,200 @@ BEGIN
 
   RETURN QUERY
   SELECT v_sale_id, v_total, v_item_count;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * upsert_expense_with_allocations
+ * Crea/edita gastos y sus asignaciones en una sola transaccion.
+ * Incluye idempotencia para alta de gastos.
+ */
+CREATE OR REPLACE FUNCTION upsert_expense_with_allocations(
+  p_expense_id UUID DEFAULT NULL,
+  p_cash_session_id UUID DEFAULT NULL,
+  p_amount NUMERIC(10,2) DEFAULT NULL,
+  p_description TEXT DEFAULT NULL,
+  p_scope expense_scope DEFAULT 'shared',
+  p_partner_id UUID DEFAULT NULL,
+  p_shared_partner_ids UUID[] DEFAULT NULL,
+  p_idempotency_key TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+  expense_id UUID,
+  allocation_count INT
+) AS $$
+DECLARE
+  v_expense_id UUID;
+  v_key TEXT;
+  v_allocation_count INT := 0;
+  v_partner_count INT := 0;
+  v_share NUMERIC(10,2);
+  v_remainder NUMERIC(10,2);
+  v_index INT := 0;
+  v_partner_uuid UUID;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'Usuario no autenticado';
+  END IF;
+
+  IF COALESCE(p_amount, 0) <= 0 THEN
+    RAISE EXCEPTION 'Monto invalido';
+  END IF;
+
+  IF COALESCE(trim(p_description), '') = '' THEN
+    RAISE EXCEPTION 'Descripcion requerida';
+  END IF;
+
+  IF p_scope = 'individual' AND p_partner_id IS NULL THEN
+    RAISE EXCEPTION 'Socia requerida para gasto individual';
+  END IF;
+
+  IF p_scope = 'shared' AND COALESCE(array_length(p_shared_partner_ids, 1), 0) = 0 THEN
+    RAISE EXCEPTION 'No hay socias para distribuir gasto compartido';
+  END IF;
+
+  v_key := NULLIF(trim(COALESCE(p_idempotency_key, '')), '');
+
+  IF p_expense_id IS NULL THEN
+    IF p_cash_session_id IS NULL THEN
+      RAISE EXCEPTION 'Sesion de caja requerida para registrar gasto';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM cash_sessions
+      WHERE id = p_cash_session_id
+        AND status = 'open'
+    ) THEN
+      RAISE EXCEPTION 'La sesion de caja no existe o ya fue cerrada';
+    END IF;
+
+    IF v_key IS NOT NULL THEN
+      SELECT id
+      INTO v_expense_id
+      FROM expenses
+      WHERE idempotency_key = v_key
+      LIMIT 1;
+
+      IF FOUND THEN
+        SELECT COUNT(*)::INT
+        INTO v_allocation_count
+        FROM expense_allocations
+        WHERE expense_id = v_expense_id;
+
+        RETURN QUERY
+        SELECT v_expense_id, v_allocation_count;
+        RETURN;
+      END IF;
+    END IF;
+
+    BEGIN
+      INSERT INTO expenses (
+        cash_session_id,
+        amount,
+        description,
+        scope,
+        registered_by,
+        synced,
+        idempotency_key
+      )
+      VALUES (
+        p_cash_session_id,
+        ROUND(p_amount, 2),
+        trim(p_description),
+        p_scope,
+        auth.uid(),
+        true,
+        v_key
+      )
+      RETURNING id INTO v_expense_id;
+    EXCEPTION
+      WHEN unique_violation THEN
+        IF v_key IS NOT NULL THEN
+          SELECT id
+          INTO v_expense_id
+          FROM expenses
+          WHERE idempotency_key = v_key
+          LIMIT 1;
+
+          IF FOUND THEN
+            SELECT COUNT(*)::INT
+            INTO v_allocation_count
+            FROM expense_allocations
+            WHERE expense_id = v_expense_id;
+
+            RETURN QUERY
+            SELECT v_expense_id, v_allocation_count;
+            RETURN;
+          END IF;
+        END IF;
+
+        RAISE;
+    END;
+  ELSE
+    SELECT id
+    INTO v_expense_id
+    FROM expenses
+    WHERE id = p_expense_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Gasto no encontrado';
+    END IF;
+
+    UPDATE expenses
+    SET
+      amount = ROUND(p_amount, 2),
+      description = trim(p_description),
+      scope = p_scope
+    WHERE id = v_expense_id;
+
+    DELETE FROM expense_allocations
+    WHERE expense_id = v_expense_id;
+  END IF;
+
+  IF p_scope = 'individual' THEN
+    INSERT INTO expense_allocations (
+      expense_id,
+      partner_id,
+      amount
+    )
+    VALUES (
+      v_expense_id,
+      p_partner_id,
+      ROUND(p_amount, 2)
+    );
+
+    v_allocation_count := 1;
+  ELSE
+    v_partner_count := array_length(p_shared_partner_ids, 1);
+    v_share := ROUND(p_amount / v_partner_count, 2);
+    v_remainder := ROUND(p_amount - (v_share * v_partner_count), 2);
+
+    FOREACH v_partner_uuid IN ARRAY p_shared_partner_ids LOOP
+      v_index := v_index + 1;
+
+      INSERT INTO expense_allocations (
+        expense_id,
+        partner_id,
+        amount
+      )
+      VALUES (
+        v_expense_id,
+        v_partner_uuid,
+        CASE
+          WHEN v_index = 1 THEN ROUND(v_share + v_remainder, 2)
+          ELSE v_share
+        END
+      );
+    END LOOP;
+
+    v_allocation_count := v_partner_count;
+  END IF;
+
+  RETURN QUERY
+  SELECT v_expense_id, v_allocation_count;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public;

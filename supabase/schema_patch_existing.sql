@@ -67,6 +67,12 @@ BEGIN
 END $$;
 
 -- Data cleanup before applying constraints
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
 UPDATE products SET purchase_price = 0 WHERE purchase_price < 0;
 UPDATE products SET sale_price = 0.01 WHERE sale_price <= 0;
 UPDATE products SET stock = 0 WHERE stock < 0;
@@ -148,6 +154,16 @@ BEGIN
     ADD CONSTRAINT sales_payment_method_valid CHECK (payment_method IN ('cash', 'transfer'));
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sales_amount_received_nonnegative') THEN
+    ALTER TABLE sales
+    ADD CONSTRAINT sales_amount_received_nonnegative CHECK (amount_received IS NULL OR amount_received >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sales_change_given_nonnegative') THEN
+    ALTER TABLE sales
+    ADD CONSTRAINT sales_change_given_nonnegative CHECK (change_given IS NULL OR change_given >= 0);
+  END IF;
+
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sale_items_quantity_positive') THEN
     ALTER TABLE sale_items
     ADD CONSTRAINT sale_items_quantity_positive CHECK (quantity > 0);
@@ -178,5 +194,13 @@ BEGIN
     ADD CONSTRAINT inventory_movements_quantity_nonzero CHECK (quantity_change <> 0);
   END IF;
 END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idempotency_key
+ON sales(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_idempotency_key
+ON expenses(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 
 COMMIT;

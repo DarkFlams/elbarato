@@ -90,11 +90,21 @@ CREATE TABLE sales (
   sold_by UUID REFERENCES auth.users(id),
   total NUMERIC(10,2) NOT NULL,
   payment_method TEXT DEFAULT 'cash',
+  notes TEXT,
+  amount_received NUMERIC(10,2),
+  change_given NUMERIC(10,2),
+  idempotency_key TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   synced BOOLEAN DEFAULT true,
   CONSTRAINT sales_total_nonnegative CHECK (total >= 0),
-  CONSTRAINT sales_payment_method_valid CHECK (payment_method IN ('cash', 'transfer'))
+  CONSTRAINT sales_payment_method_valid CHECK (payment_method IN ('cash', 'transfer')),
+  CONSTRAINT sales_amount_received_nonnegative CHECK (amount_received IS NULL OR amount_received >= 0),
+  CONSTRAINT sales_change_given_nonnegative CHECK (change_given IS NULL OR change_given >= 0)
 );
+
+CREATE UNIQUE INDEX idx_sales_idempotency_key
+ON sales(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 
 -- ============================================
 -- DETALLE DE VENTAS
@@ -124,11 +134,16 @@ CREATE TABLE expenses (
   amount NUMERIC(10,2) NOT NULL,
   description TEXT NOT NULL,
   scope expense_scope NOT NULL,
+  idempotency_key TEXT,
   registered_by UUID REFERENCES auth.users(id),
   created_at TIMESTAMPTZ DEFAULT now(),
   synced BOOLEAN DEFAULT true,
   CONSTRAINT expenses_amount_positive CHECK (amount > 0)
 );
+
+CREATE UNIQUE INDEX idx_expenses_idempotency_key
+ON expenses(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 
 -- ============================================
 -- ASIGNACIÓN DE GASTOS
