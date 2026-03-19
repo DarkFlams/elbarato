@@ -19,7 +19,8 @@ import { SaleTicket } from "./sale-ticket";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
 import { toast } from "sonner";
 import { playCheckoutSound } from "@/lib/audio";
-import { registerSaleWithOfflineFallback } from "@/lib/offline/rpc";
+import { registerSaleLocalFirst } from "@/lib/local/sales";
+import { printTicketDirect } from "@/lib/print-ticket";
 
 export function Cart() {
   const {
@@ -56,7 +57,7 @@ export function Cart() {
     if (items.length === 0) return;
 
     if (!session) {
-      toast.error("No hay sesión de caja abierta");
+      toast.error("Caja local aún no inicializada");
       return;
     }
 
@@ -81,20 +82,24 @@ export function Cart() {
         unit_price: item.price_override,
       }));
 
-      const registerResult = await registerSaleWithOfflineFallback({
-        p_cash_session_id: session.id,
-        p_payment_method: paymentMethod,
-        p_items: salePayload,
-        p_notes: notes.trim() || null,
-        p_amount_received:
+      const registerResult = await registerSaleLocalFirst({
+        cashSessionId: session.id,
+        paymentMethod,
+        items: salePayload.map((item) => ({
+          productId: item.product_id,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+        })),
+        notes: notes.trim() || null,
+        amountReceived:
           paymentMethod === "cash" && amountReceived
             ? Number(amountReceived)
             : null,
-        p_change_given:
+        changeGiven:
           paymentMethod === "cash" && amountReceived
             ? Math.max(0, Number(amountReceived) - total)
             : null,
-        p_idempotency_key: requestKey,
+        idempotencyKey: requestKey,
       });
 
       if (registerResult.mode === "queued") {
@@ -110,7 +115,14 @@ export function Cart() {
           date: new Date(),
         };
         setLastTicketData(ticketSnapshot);
-        setTicketOpen(true);
+        void printTicketDirect({
+          items: ticketSnapshot.items,
+          partnerSummaries: ticketSnapshot.summaries,
+          total: ticketSnapshot.total,
+          paymentMethod: ticketSnapshot.paymentMethod,
+          saleId: ticketSnapshot.saleId,
+          date: ticketSnapshot.date,
+        });
 
         playCheckoutSound();
         toast.warning(`Venta guardada offline - $${total.toFixed(2)}`, {
@@ -143,16 +155,33 @@ export function Cart() {
         date: new Date(),
       };
       setLastTicketData(ticketSnapshot);
-      setTicketOpen(true);
+      void printTicketDirect({
+        items: ticketSnapshot.items,
+        partnerSummaries: ticketSnapshot.summaries,
+        total: ticketSnapshot.total,
+        paymentMethod: ticketSnapshot.paymentMethod,
+        saleId: ticketSnapshot.saleId,
+        date: ticketSnapshot.date,
+      });
 
       playCheckoutSound();
-      toast.success(`Venta registrada - $${registeredTotal.toFixed(2)}`, {
-        description: `${registeredItemCount} producto${
-          registeredItemCount > 1 ? "s" : ""
-        } - ${
-          paymentMethod === "cash" ? "Efectivo" : "Transferencia"
-        }`,
-      });
+      if (registerResult.mode === "local") {
+        toast.success(`Venta guardada local - $${registeredTotal.toFixed(2)}`, {
+          description: `${registeredItemCount} producto${
+            registeredItemCount > 1 ? "s" : ""
+          } - ${
+            paymentMethod === "cash" ? "Efectivo" : "Transferencia"
+          } - se sincronizara en segundo plano`,
+        });
+      } else {
+        toast.success(`Venta registrada - $${registeredTotal.toFixed(2)}`, {
+          description: `${registeredItemCount} producto${
+            registeredItemCount > 1 ? "s" : ""
+          } - ${
+            paymentMethod === "cash" ? "Efectivo" : "Transferencia"
+          }`,
+        });
+      }
 
       clearCart();
       saleRequestKeyRef.current = null;

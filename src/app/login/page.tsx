@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ShoppingBag, Loader2 } from "lucide-react";
+import { isAuthBypassEnabled } from "@/lib/auth-mode";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -16,9 +17,40 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const supabase = createClient();
+  const bypassAuth = isAuthBypassEnabled();
+
+  useEffect(() => {
+    if (bypassAuth) {
+      router.replace("/caja");
+      return;
+    }
+
+    let mounted = true;
+
+    const restoreSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted || !session) return;
+      router.replace("/caja");
+    };
+
+    void restoreSession();
+
+    return () => {
+      mounted = false;
+    };
+  }, [bypassAuth, router, supabase]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (bypassAuth) {
+      router.replace("/caja");
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -53,6 +85,11 @@ export default function LoginPage() {
           </p>
         </CardHeader>
         <CardContent>
+          {bypassAuth && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              Modo temporal sin login activo. Entrando directo al sistema.
+            </div>
+          )}
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Correo electrónico</Label>

@@ -21,13 +21,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createClient } from "@/lib/supabase/client";
 import { useCashSession } from "@/hooks/use-cash-session";
 import { PARTNERS } from "@/lib/constants";
 import type { Partner, ExpenseScope } from "@/types/database";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { upsertExpenseWithOfflineFallback } from "@/lib/offline/rpc";
+import {
+  getExpenseEligiblePartnersLocalFirst,
+  getSessionExpensesLocalFirst,
+  upsertExpenseLocalFirst,
+} from "@/lib/local/cash-expenses";
 
 interface ExpenseRow {
   id: string;
@@ -37,7 +40,7 @@ interface ExpenseRow {
   created_at: string;
   expense_allocations?: {
     partner_id: string;
-    partners: { display_name: string } | null;
+    partner: { display_name: string } | null;
   }[];
 }
 
@@ -69,31 +72,17 @@ export function ExpensesPanel() {
     }
 
     try {
-      const supabase = createClient();
-
-      const [expensesRes, partnersRes] = await Promise.all([
-        supabase
-          .from("expenses")
-          .select(
-            "id, amount, description, scope, created_at, expense_allocations(partner_id, partners(display_name))"
-          )
-          .eq("cash_session_id", session.id)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("partners")
-          .select("*")
-          .eq("is_expense_eligible", true)
-          .order("name"),
+      const [expenseRows, partnerRows] = await Promise.all([
+        getSessionExpensesLocalFirst(session.id),
+        getExpenseEligiblePartnersLocalFirst(),
       ]);
 
-      if (expensesRes.data) {
-        const rows = expensesRes.data as ExpenseRow[];
-        setExpenses(rows);
-        setTotalExpenses(
-          rows.reduce((sum: number, e: ExpenseRow) => sum + Number(e.amount), 0)
-        );
-      }
-      if (partnersRes.data) setPartners(partnersRes.data as Partner[]);
+      const rows = (expenseRows as ExpenseRow[]) || [];
+      setExpenses(rows);
+      setTotalExpenses(
+        rows.reduce((sum: number, expense: ExpenseRow) => sum + Number(expense.amount), 0)
+      );
+      setPartners(partnerRows as Partner[]);
     } catch (err) {
       console.error("[ExpensesPanel] fetch error:", err);
     } finally {
@@ -118,7 +107,7 @@ export function ExpensesPanel() {
       return;
     }
     if (!session) {
-      toast.error("No hay sesion de caja abierta");
+      toast.error("Caja local aun no inicializada");
       return;
     }
     if (scope === "individual" && !selectedPartnerId) {
@@ -143,16 +132,16 @@ export function ExpensesPanel() {
     setSubmitting(true);
 
     try {
-      const saveResult = await upsertExpenseWithOfflineFallback({
-        p_expense_id: editingExpense?.id ?? null,
-        p_cash_session_id: session.id,
-        p_amount: numAmount,
-        p_description: description.trim(),
-        p_scope: scope,
-        p_partner_id: scope === "individual" ? selectedPartnerId : null,
-        p_shared_partner_ids:
+      const saveResult = await upsertExpenseLocalFirst({
+        expenseId: editingExpense?.id ?? null,
+        cashSessionId: session.id,
+        amount: numAmount,
+        description: description.trim(),
+        scope,
+        partnerId: scope === "individual" ? selectedPartnerId : null,
+        sharedPartnerIds:
           scope === "shared" ? partners.map((partner) => partner.id) : null,
-        p_idempotency_key: editingExpense ? null : requestKey,
+        idempotencyKey: editingExpense ? null : requestKey,
       });
 
       if (saveResult.mode === "queued") {
@@ -160,6 +149,12 @@ export function ExpensesPanel() {
           description:
             "Pendiente de sincronizacion. Se enviara al volver internet.",
         });
+      } else if (saveResult.mode === "local") {
+        toast.success(
+          editingExpense
+            ? "Gasto guardado localmente"
+            : `Gasto guardado local - $${numAmount.toFixed(2)}`
+        );
       } else {
         toast.success(
           editingExpense
@@ -403,7 +398,7 @@ export function ExpensesPanel() {
                     {formatTime(exp.created_at)}{" - "}
                     {exp.scope === "shared"
                       ? "Compartido"
-                      : exp.expense_allocations?.[0]?.partners?.display_name ??
+                      : exp.expense_allocations?.[0]?.partner?.display_name ??
                         "Individual"}
                   </p>
                 </div>

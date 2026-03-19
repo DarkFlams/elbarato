@@ -1,22 +1,29 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { AlertTriangle, CloudOff, CloudUpload, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useOfflineSync } from "@/hooks/use-offline-sync";
 
 export function OfflineSyncIndicator() {
+  const [isMounted, setIsMounted] = useState(false);
   const {
     isOnline,
     isSyncing,
+    syncSupported,
     pendingCount,
     failedCount,
     runSync,
   } = useOfflineSync();
 
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   const shouldRender =
     !isOnline || isSyncing || pendingCount > 0 || failedCount > 0;
 
-  if (!shouldRender) return null;
+  if (!isMounted || !shouldRender) return null;
 
   return (
     <div
@@ -47,7 +54,7 @@ export function OfflineSyncIndicator() {
         </span>
       </div>
 
-      {isOnline && pendingCount > 0 && (
+      {isOnline && pendingCount > 0 && syncSupported && (
         <Button
           size="sm"
           variant="outline"

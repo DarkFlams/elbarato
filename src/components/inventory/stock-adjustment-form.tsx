@@ -1,8 +1,8 @@
 /**
  * @file stock-adjustment-form.tsx
  * @description Formulario dedicado para registrar altas y bajas de stock.
- * Busca productos bajo demanda (server-side). Soporta pistola laser.
- * 
+ * Busca productos bajo demanda. Soporta pistola laser.
+ *
  * NOTE: La opcion "Ropa Vieja / Bodega" esta oculta temporalmente.
  * Ver docs/ropa-vieja.md y migration_bodega_remate.sql para reactivar.
  */
@@ -15,7 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { createClient } from "@/lib/supabase/client";
+import {
+  adjustProductStockLocalFirst,
+  findAdjustmentProductByCodeLocalFirst,
+  searchAdjustmentProductsLocalFirst,
+} from "@/lib/local/inventory-movements";
 import { cn } from "@/lib/utils";
 import type { PartnerEnum } from "@/types/database";
 import { toast } from "sonner";
@@ -48,13 +52,6 @@ interface StockAdjustmentFormProps {
   onAdjusted?: () => void;
 }
 
-const PRODUCT_SELECT = `
-  id, name, barcode, sku, stock, min_stock,
-  owner:partners!products_owner_id_fkey (
-    id, name, display_name, color_hex
-  )
-`;
-
 export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductForAdjustment[]>([]);
@@ -67,7 +64,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // ── Debounced server-side search ──
+  // Debounced local-first search
   useEffect(() => {
     if (query.length < 2) {
       setResults([]);
@@ -78,17 +75,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const supabase = createClient();
-        const safeTerm = query.trim().replace(/[,"]/g, " ");
-        const { data, error } = await supabase
-          .from("products")
-          .select(PRODUCT_SELECT)
-          .eq("is_active", true)
-          .or(`name.ilike.%${safeTerm}%,barcode.ilike.%${safeTerm}%,sku.ilike.%${safeTerm}%`)
-          .order("name")
-          .limit(10);
-
-        if (error) throw error;
+        const data = await searchAdjustmentProductsLocalFirst(query);
         setResults((data as ProductForAdjustment[]) || []);
         setIsOpen(true);
       } catch (err) {
@@ -101,7 +88,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // ── Close dropdown on outside click ──
+  // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -112,7 +99,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // ── Select a product from the dropdown ──
+  // Select a product from the dropdown
   const handleSelect = (product: ProductForAdjustment) => {
     setSelectedProduct(product);
     setQuery("");
@@ -123,19 +110,10 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
     });
   };
 
-  // ── Barcode scanner auto-select via laser ──
+  // Barcode scanner auto-select via laser
   const handleScan = useCallback(async (scannedCode: string) => {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("products")
-        .select(PRODUCT_SELECT)
-        .eq("is_active", true)
-        .or(`barcode.eq.${scannedCode},sku.eq.${scannedCode}`)
-        .maybeSingle();
-
-      if (error) throw error;
-
+      const data = await findAdjustmentProductByCodeLocalFirst(scannedCode);
       if (!data) {
         playErrorSound();
         toast.error("Producto no encontrado", {
@@ -158,19 +136,6 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
 
   useBarcodeScanner({ onScan: handleScan, enabled: true });
 
-  // ── Refresh selected product after adjustment ──
-  const refreshSelectedProduct = useCallback(async (productId: string) => {
-    try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("products")
-        .select(PRODUCT_SELECT)
-        .eq("id", productId)
-        .maybeSingle();
-      if (!error && data) setSelectedProduct(data as ProductForAdjustment);
-    } catch { /* keep old */ }
-  }, []);
-
   const handleSubmit = async () => {
     if (!selectedProduct) {
       toast.error("Selecciona un producto");
@@ -192,19 +157,14 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
 
     setIsSubmitting(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("adjust_product_stock", {
-        p_product_id: selectedProduct.id,
-        p_quantity: qty,
-        p_operation: operation,
-        p_reason: operation === "in" ? "restock" : "manual_adjustment",
+      const row = await adjustProductStockLocalFirst({
+        productId: selectedProduct.id,
+        quantity: qty,
+        operation,
+        reason: operation === "in" ? "restock" : "manual_adjustment",
       });
-
-      if (error) throw error;
-
-      const row = Array.isArray(data) ? data[0] : data;
-      const newStock = Number(row?.new_stock ?? 0);
-      const delta = Number(row?.movement_delta ?? 0);
+      const newStock = Number(row?.newStock ?? 0);
+      const delta = Number(row?.movementDelta ?? 0);
 
       toast.success(
         operation === "in" ? "Alta registrada" : "Baja registrada",
@@ -214,7 +174,14 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
       );
 
       setQuantity("");
-      await refreshSelectedProduct(selectedProduct.id);
+      setSelectedProduct((current) =>
+        current
+          ? {
+              ...current,
+              stock: newStock,
+            }
+          : current
+      );
       onAdjusted?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error inesperado";
@@ -248,7 +215,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
         </div>
       </div>
 
-      {/* ── Inline search bar (like POS) ── */}
+      {/* Inline search bar */}
       <div ref={containerRef} className="relative">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -312,7 +279,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
         )}
       </div>
 
-      {/* ── Selected product info ── */}
+      {/* Selected product info */}
       {selectedProduct && selectedStockVisual && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -360,7 +327,7 @@ export function StockAdjustmentForm({ onAdjusted }: StockAdjustmentFormProps) {
         </div>
       )}
 
-      {/* ── Operation + Quantity ── */}
+      {/* Operation + Quantity */}
       <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
         <div className="space-y-2">
           <Label>Tipo de movimiento</Label>

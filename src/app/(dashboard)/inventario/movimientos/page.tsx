@@ -7,9 +7,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpDown } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { StockAdjustmentForm } from "@/components/inventory/stock-adjustment-form";
 import { InventoryMovementList } from "@/components/inventory/inventory-movement-list";
+import { getCatalogPartners } from "@/lib/local/catalog";
 import type { Partner } from "@/types/database";
 
 export default function InventarioMovimientosPage() {
@@ -18,13 +18,7 @@ export default function InventarioMovimientosPage() {
 
   const fetchPartners = useCallback(async () => {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("partners")
-        .select("*")
-        .order("name");
-
-      if (error) throw error;
+      const data = await getCatalogPartners();
       setPartners((data as Partner[]) || []);
     } catch (err) {
       console.error("[InventarioMovimientosPage] fetchPartners error:", err);

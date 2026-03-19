@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { usePathname, useRouter } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,14 +28,18 @@ import {
   ArrowUpDown,
   Database,
   BarChart3,
-  ClipboardCheck,
   CloudOff,
+  CloudDownload,
   LogOut,
   ChevronLeft,
   ChevronRight,
+  Loader2,
+  Printer,
 } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
 import { OfflineSyncIndicator } from "@/components/offline/offline-sync-indicator";
+import { LocalCatalogGate } from "@/components/offline/local-catalog-gate";
+import { isAuthBypassEnabled } from "@/lib/auth-mode";
 
 const navigation = [
   {
@@ -53,7 +58,8 @@ const navigation = [
       { title: "Altas y Bajas", href: "/inventario/movimientos", icon: ArrowUpDown },
       { title: "Migracion", href: "/inventario/migracion", icon: Database },
       { title: "Reportes", href: "/reportes", icon: BarChart3 },
-      { title: "Cierre de Caja", href: "/cierre", icon: ClipboardCheck },
+      { title: "Impresion", href: "/impresion", icon: Printer },
+      { title: "Actualizaciones", href: "/actualizaciones", icon: CloudDownload },
     ],
   },
 ];
@@ -63,11 +69,23 @@ function AppSidebar() {
   const router = useRouter();
   const supabase = createClient();
   const { state, toggleSidebar } = useSidebar();
+  const bypassAuth = isAuthBypassEnabled();
 
   const handleLogout = async () => {
+    if (bypassAuth) {
+      router.push("/caja");
+      router.refresh();
+      return;
+    }
+
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  };
+
+  const handleNavigate = (href: string) => {
+    if (pathname === href) return;
+    router.push(href);
   };
 
   return (
@@ -111,7 +129,8 @@ function AppSidebar() {
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
-                        render={<Link href={item.href} />}
+                        type="button"
+                        onClick={() => handleNavigate(item.href)}
                         isActive={isActive}
                         tooltip={item.title}
                         className="transition-all duration-200"
@@ -146,6 +165,79 @@ function AppSidebar() {
   );
 }
 
+function DashboardAuthGate({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const router = useRouter();
+  const supabase = createClient();
+  const bypassAuth = isAuthBypassEnabled();
+  const [status, setStatus] = useState<"checking" | "allowed">(
+    bypassAuth ? "allowed" : "checking"
+  );
+
+  useEffect(() => {
+    if (bypassAuth) {
+      setStatus("allowed");
+      return;
+    }
+
+    let mounted = true;
+
+    const verifySession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (session) {
+        setStatus("allowed");
+        return;
+      }
+
+      router.replace("/login");
+    };
+
+    void verifySession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
+      if (!mounted) return;
+
+      if (session) {
+        setStatus("allowed");
+        return;
+      }
+
+      setStatus("checking");
+      router.replace("/login");
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [bypassAuth, router, supabase]);
+
+  if (status === "allowed") {
+    return <>{children}</>;
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+        <Loader2 className="h-5 w-5 animate-spin text-slate-500" />
+        <span className="text-sm font-medium text-slate-700">
+          Verificando sesion de Supabase...
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardLayout({
   children,
 }: {
@@ -156,8 +248,10 @@ export default function DashboardLayout({
       <AppSidebar />
       <SidebarInset>
         <main className="flex flex-col h-screen p-3 lg:p-4 2xl:p-6 overflow-hidden">
-          <OfflineSyncIndicator />
-          {children}
+          <DashboardAuthGate>
+            <OfflineSyncIndicator />
+            <LocalCatalogGate>{children}</LocalCatalogGate>
+          </DashboardAuthGate>
         </main>
       </SidebarInset>
     </SidebarProvider>

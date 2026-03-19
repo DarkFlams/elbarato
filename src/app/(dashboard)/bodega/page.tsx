@@ -13,7 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { createClient } from "@/lib/supabase/client";
+import {
+  createRemateLocalFirst,
+  disposeProductLocalFirst,
+  listBodegaProductsLocalFirst,
+} from "@/lib/local/bodega";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -38,13 +42,6 @@ interface BodegaProduct {
     color_hex: string;
   } | null;
 }
-
-const BODEGA_SELECT = `
-  id, name, barcode, sku, sale_price, stock, bodega_stock, bodega_at, is_active,
-  owner:partners!products_owner_id_fkey (
-    id, name, display_name, color_hex
-  )
-`;
 
 function getAgingLabel(bodegaAt: string | null): { text: string; color: string } | null {
   if (!bodegaAt) return null;
@@ -74,15 +71,7 @@ export default function BodegaPage() {
   const fetchBodega = useCallback(async () => {
     setLoading(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("products")
-        .select(BODEGA_SELECT)
-        .gt("bodega_stock", 0)
-        .is("disposed_at", null)
-        .order("bodega_at", { ascending: true, nullsFirst: false });
-
-      if (error) throw error;
+      const data = await listBodegaProductsLocalFirst();
       setProducts((data as BodegaProduct[]) || []);
     } catch (err) {
       console.error("[BodegaPage] fetch error:", err);
@@ -131,18 +120,14 @@ export default function BodegaPage() {
 
     setIsSubmitting(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("create_remate", {
-        p_product_id: remateModal.id,
-        p_clearance_price: price,
-        p_stock: stock,
+      const row = await createRemateLocalFirst({
+        productId: remateModal.id,
+        clearancePrice: price,
+        stock,
       });
 
-      if (error) throw error;
-
-      const row = Array.isArray(data) ? data[0] : data;
-      toast.success(`🏷️ Remate creado: ${row?.product_name}`, {
-        description: `$${row?.original_price} → $${price} | ${stock} unidades reingresadas`,
+      toast.success(`Remate creado: ${row.productName}`, {
+        description: `$${row.originalPrice} -> $${price} | ${stock} unidades reingresadas`,
       });
 
       setRemateModal(null);
@@ -161,16 +146,9 @@ export default function BodegaPage() {
   const handleDispose = async (productId: string) => {
     setIsSubmitting(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("dispose_product", {
-        p_product_id: productId,
-      });
-
-      if (error) throw error;
-
-      const row = Array.isArray(data) ? data[0] : data;
-      toast.success(`${row?.product_name} desechado`, {
-        description: "El registro se conserva para auditoría",
+      const row = await disposeProductLocalFirst(productId);
+      toast.success(`${row.productName} desechado`, {
+        description: "El registro se conserva para auditoria",
       });
 
       setConfirmDispose(null);

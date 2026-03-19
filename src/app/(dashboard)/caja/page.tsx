@@ -1,37 +1,35 @@
 /**
  * @file caja/page.tsx
  * @description Pantalla principal del Punto de Venta (POS).
- *              Layout: Carrito unificado (izq) + Stats/Gastos (der)
+ * Layout: Carrito unificado (izq) + Stats/Gastos (der)
  */
 
 "use client";
 
 import { useCallback, useState } from "react";
 import {
-  Wifi,
-  WifiOff,
   Banknote,
-  DollarSign,
-  PenLine,
   ChevronDown,
   ChevronUp,
+  DollarSign,
+  PenLine,
+  Wifi,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
+import { findCatalogProductByBarcode } from "@/lib/local/catalog";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import { useCart } from "@/hooks/use-cart";
 import { useCashSession } from "@/hooks/use-cash-session";
+import { playErrorSound, playSuccessSound } from "@/lib/audio";
 import { Cart } from "@/components/pos/cart";
+import { ExpensesPanel } from "@/components/pos/expenses-panel";
 import { ProductSearch } from "@/components/pos/product-search";
+import { SessionStats } from "@/components/pos/session-stats";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { ProductWithOwner } from "@/types/database";
-import { toast } from "sonner";
-import { playSuccessSound, playErrorSound } from "@/lib/audio";
-import { OpenSessionModal } from "@/components/pos/open-session-modal";
-import { SessionStats } from "@/components/pos/session-stats";
-import { ExpensesPanel } from "@/components/pos/expenses-panel";
 
 export default function CajaPage() {
   const { session, isLoading: sessionLoading } = useCashSession();
@@ -55,37 +53,22 @@ export default function CajaPage() {
       setLastScanned(barcode);
 
       try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("products")
-          .select(
-            `
-            *,
-            owner:partners!products_owner_id_fkey (
-              id, name, display_name, color_hex
-            )
-          `
-          )
-          .or(`barcode.eq.${barcode},sku.eq.${barcode}`)
-          .eq("is_active", true)
-          .maybeSingle();
-
-        if (error) throw error;
+        const data = await findCatalogProductByBarcode(barcode);
 
         if (!data) {
           playErrorSound();
           toast.error("Producto no encontrado", {
-            description: `Código: ${barcode}`,
+            description: `Codigo: ${barcode}`,
           });
           return;
         }
 
-        const product = data as unknown as ProductWithOwner;
-
+        const product = data as ProductWithOwner;
         const result = addItem(product);
+
         if (!result.ok) {
           playErrorSound();
-          toast.warning(`No puedes agregar más de ${product.name}`, {
+          toast.warning(`No puedes agregar mas de ${product.name}`, {
             description: `Error: ${result.reason}`,
           });
           return;
@@ -94,11 +77,11 @@ export default function CajaPage() {
         playSuccessSound();
         if (product.stock <= 0) {
           toast.warning(`${product.name} agregado sin stock`, {
-            description: `Se venderá en negativo.`,
+            description: "Se vendera en negativo.",
           });
         }
-      } catch (err) {
-        console.error("[CajaPage] scan error:", err);
+      } catch (error) {
+        console.error("[CajaPage] scan error:", error);
         toast.error("Error al buscar producto");
       }
     },
@@ -108,102 +91,101 @@ export default function CajaPage() {
   useBarcodeScanner({ onScan: handleScan, enabled: true });
 
   return (
-    <div className="flex flex-col h-full gap-4 relative min-h-0">
-      <OpenSessionModal />
-
-      <div className="flex-1 flex flex-col lg:flex-row gap-5 min-h-0 w-full overflow-hidden">
-
-        {/* BLOQUE IZQUIERDO: Buscador + Carrito Unificado */}
-        <div className="flex-1 flex flex-col gap-4 min-h-0 min-w-0 lg:min-w-[400px]">
-
-          {/* Barra de búsqueda */}
-          <div className="flex items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm shrink-0">
+    <div className="relative flex h-full min-h-0 flex-col gap-4">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden lg:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:min-w-[400px]">
+          <div className="flex shrink-0 items-center gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div className="flex-1">
               <ProductSearch />
             </div>
+
             {lastScanned && (
-              <div className="hidden md:flex items-center text-sm text-slate-500 mr-2">
-                Último: <code className="ml-1 bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono font-bold tracking-tight">{lastScanned}</code>
+              <div className="mr-2 hidden items-center text-sm text-slate-500 md:flex">
+                Ultimo:
+                <code className="ml-1 rounded bg-slate-100 px-1 py-0.5 font-mono font-bold tracking-tight text-indigo-600">
+                  {lastScanned}
+                </code>
               </div>
             )}
+
             <Badge
               variant="outline"
-              className={`px-3 py-1.5 shrink-0 ${
+              className={`shrink-0 px-3 py-1.5 ${
                 session
-                  ? "border-emerald-200 text-emerald-700 bg-emerald-50"
-                  : "border-amber-200 text-amber-700 bg-amber-50"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
               }`}
             >
-              {session ? (
-                <>
-                  <Wifi className="h-4 w-4 mr-1.5" /> Sesión Activa
-                </>
-              ) : (
-                <>
-                  <WifiOff className="h-4 w-4 mr-1.5" />
-                  {sessionLoading ? "Cargando..." : "Caja Cerrada"}
-                </>
-              )}
+              <Wifi className="mr-1.5 h-4 w-4" />
+              {sessionLoading
+                ? "Inicializando caja local..."
+                : session
+                  ? "Caja local activa"
+                  : "Reintentando sesion local..."}
             </Badge>
           </div>
 
-          {/* Carrito (incluye items + total + pago + registrar) */}
-          <div className="flex-1 min-h-0">
+          <div className="min-h-0 flex-1">
             <Cart />
           </div>
 
-          {/* PANEL INFERIOR: Observaciones y Calculadora */}
-          <div className="flex flex-row gap-4 shrink-0">
-            {/* Tarjeta de Observaciones */}
-            <div className="flex-1 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-1.5">
-              <Label htmlFor="notes" className="text-slate-500 font-semibold flex items-center gap-2 text-[11px] uppercase tracking-wide">
+          <div className="flex shrink-0 flex-row gap-4">
+            <div className="flex flex-1 flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+              <Label
+                htmlFor="notes"
+                className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+              >
                 <PenLine className="h-3 w-3" />
                 Observaciones
               </Label>
               <Textarea
                 id="notes"
-                placeholder="Ej. Falta entregar producto X, Cliente VIP..."
-                className="resize-none flex-1 bg-slate-50 shadow-inner border-slate-200/60 focus-visible:ring-indigo-500/30 font-medium text-slate-700"
+                placeholder="Ej. Falta entregar producto, cliente VIP..."
+                className="flex-1 resize-none border-slate-200/60 bg-slate-50 font-medium text-slate-700 shadow-inner focus-visible:ring-indigo-500/30"
                 value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+                onChange={(event) => setNotes(event.target.value)}
                 disabled={isProcessing}
               />
             </div>
 
-            {/* Tarjeta de Calculadora */}
-            <div className="w-[300px] xl:w-[320px] 2xl:w-[380px] shrink-0 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+            <div className="w-[300px] shrink-0 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm xl:w-[320px] 2xl:w-[380px]">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label htmlFor="received" className="text-slate-500 font-semibold flex items-center gap-1.5 text-[10px] sm:text-[11px] uppercase tracking-wide whitespace-nowrap">
+                  <Label
+                    htmlFor="received"
+                    className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[11px]"
+                  >
                     <Banknote className="h-3.5 w-3.5 text-emerald-600" />
-                    Efectivo Recibido
+                    Efectivo recibido
                   </Label>
                   <div className="relative">
-                    <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600 font-bold" />
+                    <DollarSign className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600" />
                     <Input
                       id="received"
                       type="number"
                       min="0"
                       step="0.01"
                       placeholder="0.00"
-                      className="pl-7 h-10 text-lg font-bold font-mono border-emerald-200 bg-emerald-50/50 text-emerald-900 focus-visible:ring-emerald-500/40 shadow-inner"
+                      className="h-10 border-emerald-200 bg-emerald-50/50 pl-7 font-mono text-lg font-bold text-emerald-900 shadow-inner focus-visible:ring-emerald-500/40"
                       value={amountReceived}
-                      onChange={(e) => setAmountReceived(e.target.value)}
+                      onChange={(event) => setAmountReceived(event.target.value)}
                       disabled={isProcessing}
                     />
                   </div>
                 </div>
 
                 <div className="space-y-1">
-                  <Label className="text-slate-500 font-semibold flex items-center gap-1.5 text-[10px] sm:text-[11px] uppercase tracking-wide whitespace-nowrap">
-                    Cambio a Entregar
+                  <Label className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[11px]">
+                    Cambio a entregar
                   </Label>
-                  <div className={`flex items-center h-10 px-3 rounded-md border text-lg font-bold font-mono transition-colors shadow-inner ${
-                    Number(amountReceived) >= total && Number(amountReceived) > 0
-                      ? "bg-slate-800 border-slate-900 text-white shadow-slate-900/20"
-                      : "bg-slate-50 border-slate-200 text-slate-400"
-                  }`}>
-                    <DollarSign className="h-4 w-4 mr-0.5 opacity-70" />
+                  <div
+                    className={`flex h-10 items-center rounded-md border px-3 font-mono text-lg font-bold shadow-inner transition-colors ${
+                      Number(amountReceived) >= total && Number(amountReceived) > 0
+                        ? "border-slate-900 bg-slate-800 text-white shadow-slate-900/20"
+                        : "border-slate-200 bg-slate-50 text-slate-400"
+                    }`}
+                  >
+                    <DollarSign className="mr-0.5 h-4 w-4 opacity-70" />
                     {Number(amountReceived) > 0
                       ? Math.max(0, Number(amountReceived) - total).toFixed(2)
                       : "0.00"}
@@ -212,25 +194,21 @@ export default function CajaPage() {
               </div>
             </div>
           </div>
-
         </div>
 
-        {/* BLOQUE DERECHO: Stats de sesión + Gastos del día */}
-        <div className="hidden lg:flex flex-col w-[300px] xl:w-[320px] 2xl:w-[380px] shrink-0 gap-4 min-h-0">
+        <div className="hidden min-h-0 w-[300px] shrink-0 flex-col gap-4 lg:flex xl:w-[320px] 2xl:w-[380px]">
           <SessionStats />
           <ExpensesPanel />
         </div>
-
       </div>
 
-      {/* MOBILE TRAY */}
-      <div className="lg:hidden shrink-0 mt-auto">
+      <div className="mt-auto shrink-0 lg:hidden">
         <button
-          onClick={() => setMobileCartOpen(!mobileCartOpen)}
-          className="w-full flex items-center justify-between px-4 py-3 rounded-t-xl border border-slate-200 bg-white shadow-sm"
+          onClick={() => setMobileCartOpen((current) => !current)}
+          className="flex w-full items-center justify-between rounded-t-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">Gastos del Día</span>
+            <span className="text-sm font-semibold">Gastos del dia</span>
             {items.length > 0 && (
               <Badge
                 variant="outline"
@@ -240,6 +218,7 @@ export default function CajaPage() {
               </Badge>
             )}
           </div>
+
           {mobileCartOpen ? (
             <ChevronDown className="h-4 w-4 text-slate-500" />
           ) : (
@@ -248,7 +227,7 @@ export default function CajaPage() {
         </button>
 
         {mobileCartOpen && (
-          <div className="h-[60vh] border-x border-b border-slate-200 rounded-b-xl flex flex-col gap-4 bg-slate-50 shadow-sm p-4 overflow-y-auto">
+          <div className="flex h-[60vh] flex-col gap-4 overflow-y-auto rounded-b-xl border-x border-b border-slate-200 bg-slate-50 p-4 shadow-sm">
             <SessionStats />
             <ExpensesPanel />
           </div>

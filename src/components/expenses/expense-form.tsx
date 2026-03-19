@@ -18,7 +18,7 @@ import { PARTNERS } from "@/lib/constants";
 import type { CashSession, ExpenseScope, Partner } from "@/types/database";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { upsertExpenseWithOfflineFallback } from "@/lib/offline/rpc";
+import { upsertExpenseLocalFirst } from "@/lib/local/cash-expenses";
 
 interface ExpenseFormProps {
   cashSession: CashSession | null;
@@ -85,16 +85,16 @@ export function ExpenseForm({
     setIsSubmitting(true);
 
     try {
-      const saveResult = await upsertExpenseWithOfflineFallback({
-        p_expense_id: null,
-        p_cash_session_id: cashSession.id,
-        p_amount: numAmount,
-        p_description: description.trim(),
-        p_scope: scope,
-        p_partner_id: scope === "individual" ? selectedPartnerId : null,
-        p_shared_partner_ids:
+      const saveResult = await upsertExpenseLocalFirst({
+        expenseId: null,
+        cashSessionId: cashSession.id,
+        amount: numAmount,
+        description: description.trim(),
+        scope,
+        partnerId: scope === "individual" ? selectedPartnerId : null,
+        sharedPartnerIds:
           scope === "shared" ? partners.map((partner) => partner.id) : null,
-        p_idempotency_key: requestKey,
+        idempotencyKey: requestKey,
       });
 
       const scopeLabel =
@@ -106,6 +106,10 @@ export function ExpenseForm({
       if (saveResult.mode === "queued") {
         toast.warning(`Gasto guardado offline - $${numAmount.toFixed(2)}`, {
           description: `${description} - ${scopeLabel} - pendiente de sincronizacion`,
+        });
+      } else if (saveResult.mode === "local") {
+        toast.success(`Gasto guardado local - $${numAmount.toFixed(2)}`, {
+          description: `${description} - ${scopeLabel} - se sincronizara en segundo plano`,
         });
       } else {
         toast.success(`Gasto registrado - $${numAmount.toFixed(2)}`, {

@@ -1,18 +1,18 @@
 /**
  * @file product-search.tsx
- * @description Busqueda manual de productos por nombre o codigo de barras.
+ * @description Busqueda manual de productos por nombre o codigo.
  */
 
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Search, X, Loader2 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { createClient } from "@/lib/supabase/client";
-import { useCart } from "@/hooks/use-cart";
-import type { ProductWithOwner } from "@/types/database";
+import { useEffect, useRef, useState } from "react";
+import { Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { playSuccessSound } from "@/lib/audio";
+import { useCart } from "@/hooks/use-cart";
+import { getCatalogProducts } from "@/lib/local/catalog";
+import { Input } from "@/components/ui/input";
+import type { ProductWithOwner } from "@/types/database";
 
 export function ProductSearch() {
   const [query, setQuery] = useState("");
@@ -30,83 +30,31 @@ export function ProductSearch() {
       return;
     }
 
-    const timer = setTimeout(async () => {
+    const timer = window.setTimeout(async () => {
       setIsSearching(true);
       try {
-        const supabase = createClient();
-        const trimmed = query.trim();
-        const tokens = trimmed.split(/\s+/).filter(Boolean);
+        const data = await getCatalogProducts({
+          search: query.trim(),
+          limit: 8,
+          offset: 0,
+          stockFilter: "all",
+        });
 
-        let qb = supabase
-          .from("products")
-          .select(
-            `
-            *,
-            owner:partners!products_owner_id_fkey (
-              id, name, display_name, color_hex
-            )
-          `
-          )
-          .eq("is_active", true);
-
-        // Each token must appear somewhere in name (AND logic)
-        // e.g. "cam alg c/v" → name ILIKE '%cam%' AND name ILIKE '%alg%' AND name ILIKE '%c/v%'
-        for (const token of tokens) {
-          qb = qb.ilike("name", `%${token}%`);
-        }
-
-        // Also search by exact barcode/sku if it's a single token (could be scanning)
-        let barcodeResults: ProductWithOwner[] = [];
-        if (tokens.length === 1) {
-          const { data: bcData } = await supabase
-            .from("products")
-            .select(
-              `
-              *,
-              owner:partners!products_owner_id_fkey (
-                id, name, display_name, color_hex
-              )
-            `
-            )
-            .eq("is_active", true)
-            .or(`barcode.ilike.%${trimmed}%,sku.ilike.%${trimmed}%`)
-            .limit(4);
-          barcodeResults = (bcData as unknown as ProductWithOwner[]) || [];
-        }
-
-        const { data, error } = await qb.order("name").limit(8);
-
-        if (error) throw error;
-
-        // Merge name results + barcode results, deduplicate by id
-        const nameResults = (data as unknown as ProductWithOwner[]) || [];
-        const seen = new Set(nameResults.map((p) => p.id));
-        const merged = [...nameResults];
-        for (const bp of barcodeResults) {
-          if (!seen.has(bp.id)) {
-            merged.push(bp);
-            seen.add(bp.id);
-          }
-        }
-
-        setResults(merged);
+        setResults(data);
         setIsOpen(true);
-      } catch (err) {
-        console.error("[ProductSearch] search error:", err);
+      } catch (error) {
+        console.error("[ProductSearch] search error:", error);
       } finally {
         setIsSearching(false);
       }
     }, 300);
 
-    return () => clearTimeout(timer);
+    return () => window.clearTimeout(timer);
   }, [query]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
         setIsOpen(false);
       }
     };
@@ -125,24 +73,26 @@ export function ProductSearch() {
     }
 
     playSuccessSound();
-    
+
     if (product.stock <= 0) {
       toast.warning(`${product.name} agregado sin stock`, {
-        description: `${product.owner.display_name} - Se descontará en negativo.`,
+        description: `${product.owner.display_name} - Se vendera en negativo.`,
       });
     } else {
       toast.success(`${product.name} agregado`, {
         description: `${product.owner.display_name} - $${product.sale_price.toFixed(2)}`,
       });
     }
+
     setQuery("");
+    setResults([]);
     setIsOpen(false);
     inputRef.current?.blur();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && results.length === 1 && !isSearching) {
-      e.preventDefault();
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && results.length === 1 && !isSearching) {
+      event.preventDefault();
       handleSelect(results[0]);
     }
   };
@@ -150,15 +100,16 @@ export function ProductSearch() {
   return (
     <div ref={containerRef} className="relative">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <Input
           ref={inputRef}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Buscar producto por nombre o codigo..."
-          className="pl-9 pr-8 h-11 bg-white border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20 transition-colors shadow-sm"
+          className="h-11 border-slate-200 bg-white pl-9 pr-8 shadow-sm transition-colors focus:border-indigo-500 focus:ring-indigo-500/20"
         />
+
         {query && (
           <button
             onClick={() => {
@@ -166,29 +117,30 @@ export function ProductSearch() {
               setResults([]);
               setIsOpen(false);
             }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 transition-colors"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-900"
           >
             <X className="h-4 w-4" />
           </button>
         )}
+
         {isSearching && (
-          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-slate-400" />
+          <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" />
         )}
       </div>
 
       {isOpen && results.length > 0 && (
-        <div className="absolute z-50 w-full mt-1 rounded-lg border border-slate-200 bg-white shadow-lg overflow-hidden">
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           {results.map((product) => (
             <button
               key={product.id}
               onClick={() => handleSelect(product)}
-              className="flex items-center w-full px-3 py-2.5 text-left hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0"
+              className="flex w-full items-center border-b border-slate-100 px-3 py-2.5 text-left transition-colors hover:bg-slate-50 last:border-0"
             >
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate text-slate-900">{product.name}</p>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-900">{product.name}</p>
                 <p className="text-xs text-slate-500">
                   <span
-                    className="inline-block w-2 h-2 rounded-full mr-1"
+                    className="mr-1 inline-block h-2 w-2 rounded-full"
                     style={{ backgroundColor: product.owner.color_hex }}
                   />
                   {product.owner.display_name} - {product.barcode}
@@ -196,19 +148,14 @@ export function ProductSearch() {
                     <span className="ml-2 text-red-400">Sin stock</span>
                   )}
                   {product.stock > 0 && product.stock <= product.min_stock && (
-                    <span className="ml-2 text-yellow-400">
-                      Stock: {product.stock}
-                    </span>
+                    <span className="ml-2 text-yellow-500">Stock: {product.stock}</span>
                   )}
                 </p>
               </div>
-              <div className="text-right ml-3">
-                <p className="font-mono text-sm font-semibold">
-                  ${product.sale_price.toFixed(2)}
-                </p>
-                <p className="text-xs text-slate-500">
-                  Stock: {product.stock}
-                </p>
+
+              <div className="ml-3 text-right">
+                <p className="font-mono text-sm font-semibold">${product.sale_price.toFixed(2)}</p>
+                <p className="text-xs text-slate-500">Stock: {product.stock}</p>
               </div>
             </button>
           ))}
@@ -216,8 +163,8 @@ export function ProductSearch() {
       )}
 
       {isOpen && results.length === 0 && !isSearching && query.length >= 2 && (
-        <div className="absolute z-50 w-full mt-1 rounded-lg border border-slate-200 bg-white shadow-lg p-4 text-center text-sm text-slate-500">
-          No se encontraron productos para &quot;{query}&quot;
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white p-4 text-center text-sm text-slate-500 shadow-lg">
+          No se encontraron productos para "{query}"
         </div>
       )}
     </div>

@@ -5,11 +5,10 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
-import { Plus, Save, Loader2, Package, ScanLine } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Package, Plus, Save, ScanLine } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -19,14 +18,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { createClient } from "@/lib/supabase/client";
-import type { Partner, Product } from "@/types/database";
-import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  getPartnerInitial,
-  getPartnerVisual,
-} from "./inventory-ui";
+  generateCatalogBarcode,
+  getCatalogProducts,
+  saveCatalogProduct,
+} from "@/lib/local/catalog";
+import { createClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
+import type { Partner, Product } from "@/types/database";
+import { getPartnerInitial, getPartnerVisual } from "./inventory-ui";
 
 interface ProductFormProps {
   partners: Partner[];
@@ -36,47 +38,6 @@ interface ProductFormProps {
 }
 
 const SIZE_SPLIT_REGEX = /[\s,;/|]+/g;
-
-async function generateUniqueBarcode(): Promise<string> {
-  const supabase = createClient();
-  // Find the highest ELB- barcode to continue the sequence
-  const { data } = await supabase
-    .from("products")
-    .select("barcode")
-    .ilike("barcode", "ELB-%")
-    .order("barcode", { ascending: false })
-    .limit(1);
-
-  let nextNum = 1;
-  if (data && data.length > 0) {
-    const match = data[0].barcode.match(/ELB-(\d+)/);
-    if (match) nextNum = parseInt(match[1], 10) + 1;
-  }
-
-  // Also check total count to avoid any gap collision
-  const { count } = await supabase
-    .from("products")
-    .select("*", { count: "exact", head: true });
-
-  if (count && count >= nextNum) nextNum = count + 1;
-
-  return `ELB-${String(nextNum).padStart(5, "0")}`;
-}
-
-async function isSkuTaken(skuValue: string, excludeProductId?: string): Promise<boolean> {
-  const supabase = createClient();
-  let q = supabase
-    .from("products")
-    .select("id", { count: "exact", head: true })
-    .eq("sku", skuValue);
-
-  if (excludeProductId) {
-    q = q.neq("id", excludeProductId);
-  }
-
-  const { count } = await q;
-  return (count ?? 0) > 0;
-}
 
 function normalizeSizeToken(token: string): string {
   const trimmed = token.trim();
@@ -111,6 +72,64 @@ function parseSizesFromDescription(raw: string | null): string[] {
   return parseSizesInput(source.replace(/,/g, " "));
 }
 
+async function generateUniqueBarcode(): Promise<string> {
+  return generateCatalogBarcode();
+}
+
+async function isSkuTaken(skuValue: string, excludeProductId?: string): Promise<boolean> {
+  const products = await getCatalogProducts({
+    search: skuValue,
+    limit: 250,
+    offset: 0,
+  });
+
+  return products.some((current) => {
+    if (!current.sku || current.sku !== skuValue) {
+      return false;
+    }
+
+    if (excludeProductId && current.id === excludeProductId) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+async function upsertProductRemote(input: {
+  productId?: string | null;
+  barcode: string;
+  sku?: string | null;
+  name: string;
+  description?: string | null;
+  ownerId: string;
+  salePrice: number;
+  stock: number;
+  minStock: number;
+}) {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc("upsert_product_with_movement", {
+    p_product_id: input.productId ?? null,
+    p_barcode: input.barcode,
+    p_name: input.name.trim(),
+    p_description: input.description ?? null,
+    p_category: null,
+    p_owner_id: input.ownerId,
+    p_purchase_price: 0,
+    p_sale_price: input.salePrice,
+    p_stock: input.stock,
+    p_min_stock: input.minStock,
+    p_is_active: true,
+    p_sku: input.sku || null,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return Array.isArray(data) ? data[0] : data;
+}
+
 export function ProductForm({
   partners,
   product,
@@ -140,11 +159,14 @@ export function ProductForm({
       setSalePrice(String(product.sale_price));
       setStock(String(product.stock));
       setMinStock(String(product.min_stock));
-      setSizesText(parsedSizes.join(" ")); // keep for backward compat
-    } else if (!product && open) {
+      setSizesText(parsedSizes.join(" "));
+      return;
+    }
+
+    if (!product && open) {
       resetForm();
     }
-  }, [product, open]);
+  }, [open, product]);
 
   const resetForm = () => {
     setBarcode("");
@@ -178,54 +200,64 @@ export function ProductForm({
     setIsSubmitting(true);
 
     try {
-      // Validate SKU uniqueness if provided
       const trimmedSku = sku.trim();
       if (trimmedSku) {
         const taken = await isSkuTaken(trimmedSku, isEditing && product ? product.id : undefined);
         if (taken) {
           toast.error("Ese SKU ya existe", {
-            description: `El codigo "${trimmedSku}" ya esta asignado a otro producto.`,
+            description: `El codigo \"${trimmedSku}\" ya esta asignado a otro producto.`,
           });
           setIsSubmitting(false);
           return;
         }
       }
 
-      const supabase = createClient();
-      const nextStock = parseInt(stock, 10) || 0;
-      // For new products, auto-generate. For editing, keep existing.
+      const parsedSalePrice = parseFloat(salePrice);
+      const parsedStock = parseInt(stock, 10) || 0;
+      const parsedMinStock = parseInt(minStock, 10) || 0;
       const finalBarcode = isEditing ? barcode : await generateUniqueBarcode();
       const finalDescription = parsedSizes.length > 0 ? `Tallas: ${parsedSizes.join(", ")}` : null;
 
-      const { data, error } = await supabase.rpc("upsert_product_with_movement", {
-        p_product_id: isEditing && product ? product.id : null,
-        p_barcode: finalBarcode,
-        p_name: name.trim(),
-        p_description: finalDescription,
-        p_category: null,
-        p_owner_id: ownerId,
-        p_purchase_price: 0,
-        p_sale_price: parseFloat(salePrice),
-        p_stock: nextStock,
-        p_min_stock: parseInt(minStock, 10) || 0,
-        p_is_active: true,
-        p_sku: trimmedSku || null,
+      const result = await saveCatalogProduct({
+        productId: isEditing && product ? product.id : null,
+        remoteId: product?.id ?? null,
+        barcode: finalBarcode,
+        sku: trimmedSku || null,
+        name: name.trim(),
+        description: finalDescription,
+        category: null,
+        ownerId,
+        purchasePrice: 0,
+        salePrice: parsedSalePrice,
+        stock: parsedStock,
+        minStock: parsedMinStock,
+        isActive: true,
+      }).catch(async (localError) => {
+        console.warn("[ProductForm] local save failed, using remote fallback", localError);
+        return upsertProductRemote({
+          productId: isEditing && product ? product.id : null,
+          barcode: finalBarcode,
+          sku: trimmedSku || null,
+          name: name.trim(),
+          description: finalDescription,
+          ownerId,
+          salePrice: parsedSalePrice,
+          stock: parsedStock,
+          minStock: parsedMinStock,
+        });
       });
 
-      if (error) throw error;
-
-      const result = Array.isArray(data) ? data[0] : data;
-      const movementDelta = Number(result?.movement_delta || 0);
+      const movementDelta = Number(result?.movement_delta || result?.movementDelta || 0);
 
       if (isEditing) {
-        toast.success(`"${name}" actualizado`, {
+        toast.success(`\"${name}\" actualizado`, {
           description:
             movementDelta !== 0
               ? `Ajuste de stock: ${movementDelta > 0 ? "+" : ""}${movementDelta}`
               : "Datos actualizados",
         });
       } else {
-        toast.success(`"${name}" creado`, {
+        toast.success(`\"${name}\" creado`, {
           description:
             movementDelta !== 0
               ? `Codigo: ${finalBarcode} | Stock inicial: ${movementDelta}`
@@ -268,14 +300,11 @@ export function ProductForm({
             </div>
             {isEditing ? "Editar prenda" : "Nueva prenda"}
           </DialogTitle>
-          <DialogDescription>
-            Codigo, nombre, socia, precio y stock.
-          </DialogDescription>
+          <DialogDescription>Codigo, nombre, socia, precio y stock.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-
-          {isEditing && (
+          {isEditing ? (
             <div className="space-y-2">
               <Label htmlFor="prod-barcode" className="flex items-center gap-2">
                 <ScanLine className="h-4 w-4 text-slate-400" />
@@ -285,12 +314,11 @@ export function ProductForm({
                 id="prod-barcode"
                 value={barcode}
                 readOnly
-                className="border-slate-200 bg-slate-50 font-mono shadow-sm text-slate-500 cursor-not-allowed"
+                className="cursor-not-allowed border-slate-200 bg-slate-50 font-mono text-slate-500 shadow-sm"
               />
             </div>
-          )}
-          {!isEditing && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 flex items-center gap-2">
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
               <ScanLine className="h-4 w-4" />
               El codigo de barras se generara automaticamente al crear la prenda.
             </div>
@@ -301,7 +329,7 @@ export function ProductForm({
             <Input
               id="prod-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(event) => setName(event.target.value)}
               placeholder="Ej: Jean recto tiro alto"
               className="border-slate-200 bg-white shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
             />
@@ -310,18 +338,27 @@ export function ProductForm({
           <div className="space-y-2">
             <Label htmlFor="prod-sku" className="flex items-center gap-2">
               <Package className="h-4 w-4 text-slate-400" />
-              Código interno (SKU)
+              Codigo interno (SKU)
             </Label>
             <Input
               id="prod-sku"
               value={sku}
-              onChange={(e) => setSku(e.target.value)}
+              onChange={(event) => setSku(event.target.value)}
               placeholder="Ej: BEY12"
               className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
             />
           </div>
 
-
+          <div className="space-y-2">
+            <Label htmlFor="prod-sizes">Tallas</Label>
+            <Input
+              id="prod-sizes"
+              value={sizesText}
+              onChange={(event) => setSizesText(event.target.value)}
+              placeholder="Ej: S M L 28 30 32"
+              className="border-slate-200 bg-white shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
+            />
+          </div>
 
           <div className="space-y-2">
             <Label>Socia *</Label>
@@ -373,7 +410,7 @@ export function ProductForm({
                 step="0.01"
                 min="0"
                 value={salePrice}
-                onChange={(e) => setSalePrice(e.target.value)}
+                onChange={(event) => setSalePrice(event.target.value)}
                 placeholder="0.00"
                 className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
               />
@@ -383,9 +420,8 @@ export function ProductForm({
               <Input
                 id="prod-stock"
                 type="number"
-                min="0"
                 value={stock}
-                onChange={(e) => setStock(e.target.value)}
+                onChange={(event) => setStock(event.target.value)}
                 placeholder="0"
                 className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
               />
@@ -395,9 +431,8 @@ export function ProductForm({
               <Input
                 id="prod-minstock"
                 type="number"
-                min="0"
                 value={minStock}
-                onChange={(e) => setMinStock(e.target.value)}
+                onChange={(event) => setMinStock(event.target.value)}
                 placeholder="2"
                 className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
               />

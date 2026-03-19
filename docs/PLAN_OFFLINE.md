@@ -2,11 +2,17 @@
 
 Documento de ejecucion para implementar modo offline real sin perder continuidad.
 
-Ultima actualizacion: 2026-03-18
+Ultima actualizacion: 2026-03-19
+
+Relacion con migracion desktop:
+
+- Este plan sigue vigente.
+- Su implementacion final queda alineada con `docs/MIGRACION_DESKTOP.md`.
+- El offline final ya no se basa solo en cola local temporal: ahora depende de base local completa en PC.
 
 ## Objetivo
 
-Permitir que caja y gastos sigan operando cuando no hay internet, sin duplicados contables al reconectar.
+Permitir que caja, gastos e inventario sigan operando cuando no hay internet, sin duplicados contables al reconectar.
 
 ## Principios no negociables
 
@@ -52,6 +58,8 @@ Estado: Pendiente.
 
 - [ ] Apertura/cierre de caja offline.
 - [ ] Ajustes de inventario offline.
+- [ ] Lectura completa de inventario desde base local.
+- [ ] Escritura local de productos y movimientos.
 - [ ] Reconciliacion de conflictos de stock tras reconexion.
 
 ## Riesgos y mitigaciones

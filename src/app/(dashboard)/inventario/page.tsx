@@ -21,7 +21,7 @@ import { Package } from "lucide-react";
 import { ProductTable } from "@/components/inventory/product-table";
 import { ProductForm } from "@/components/inventory/product-form";
 import { BarcodeLabel } from "@/components/inventory/barcode-label";
-import { createClient } from "@/lib/supabase/client";
+import { getCatalogPartners } from "@/lib/local/catalog";
 import type { Partner, ProductWithOwner } from "@/types/database";
 
 export default function InventarioPage() {
@@ -34,14 +34,8 @@ export default function InventarioPage() {
   // Cargar partners
   const fetchPartners = useCallback(async () => {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("partners")
-        .select("*")
-        .order("name");
-
-      if (error) throw error;
-      setPartners((data as Partner[]) || []);
+      const data = await getCatalogPartners();
+      setPartners(data);
     } catch (err) {
       console.error("[InventarioPage] fetchPartners error:", err);
     }

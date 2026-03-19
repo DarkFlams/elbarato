@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { useCashSession } from "@/hooks/use-cash-session";
 import { ExpenseForm } from "@/components/expenses/expense-form";
 import { ExpenseList } from "@/components/expenses/expense-list";
-import { createClient } from "@/lib/supabase/client";
+import { getExpenseEligiblePartnersLocalFirst } from "@/lib/local/cash-expenses";
 import { PARTNERS } from "@/lib/constants";
 import type { Partner } from "@/types/database";
 
@@ -31,18 +31,10 @@ export default function GastosPage() {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Cargar partners de Supabase
   const fetchPartners = useCallback(async () => {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("partners")
-        .select("*")
-        .eq("is_expense_eligible", true)
-        .order("name");
-
-      if (error) throw error;
-      setPartners((data as Partner[]) || []);
+      const data = await getExpenseEligiblePartnersLocalFirst();
+      setPartners(data as Partner[]);
     } catch (err) {
       console.error("[GastosPage] fetchPartners error:", err);
     }
@@ -82,12 +74,12 @@ export default function GastosPage() {
             {session ? (
               <>
                 <Wifi className="h-3 w-3 mr-1" />
-                Sesión activa
+                Caja local activa
               </>
             ) : (
               <>
                 <WifiOff className="h-3 w-3 mr-1" />
-                {sessionLoading ? "Cargando..." : "Sin sesión"}
+                {sessionLoading ? "Inicializando..." : "Reconectando..."}
               </>
             )}
           </Badge>
@@ -144,8 +136,8 @@ export default function GastosPage() {
                   3
                 </span>
                 <p>
-                  Al <strong className="text-slate-900">cerrar caja</strong>, los
-                  gastos se restan de las ventas para calcular el neto.
+                  Los gastos se descuentan de las ventas en{" "}
+                  <strong className="text-slate-900">reportes</strong>.
                 </p>
               </div>
             </div>

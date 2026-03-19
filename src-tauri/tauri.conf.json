@@ -1,0 +1,52 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "POS Tienda de Ropa",
+  "version": "0.1.4",
+  "identifier": "com.elbarato.pos",
+  "build": {
+    "frontendDist": "../out",
+    "devUrl": "http://127.0.0.1:4310",
+    "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tauri-before-dev.ps1",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tauri-before-build.ps1"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "POS Tienda de Ropa",
+        "width": 1366,
+        "height": 768,
+        "minWidth": 1024,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "maximized": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGNUNBRURFOTFFRkQwNzMKUldSejBPK1IzcTVjMythbUdpc1doUzhzeVlSdTVWOE5ialRJd0cwd0NlbG5leGtCQlZ6SlV6OFAK",
+      "endpoints": [
+        "https://github.com/DarkFlams/elbarato/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -27,9 +27,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { createClient } from "@/lib/supabase/client";
 import { getPartnerConfig, getPartnerConfigFromPartner } from "@/lib/partners";
 import type { Partner, Expense, ExpenseAllocation } from "@/types/database";
+import {
+  getCashSessionReportLocalFirst,
+  getCashSessionsHistoryLocalFirst,
+  getExpensesBySessionLocalFirst,
+  getSalesHistoryLocalFirst,
+} from "@/lib/local/history";
 
 interface ExpenseWithAllocations extends Expense {
   expense_allocations: ExpenseAllocation[];
@@ -69,89 +74,40 @@ export default function VentasPage() {
   const fetchSales = useCallback(async () => {
     setIsLoading(true);
     try {
-      const supabase = createClient();
-      let query = supabase
-        .from("sales")
-        .select(
-          `
-          id, 
-          created_at, 
-          total, 
-          payment_method, 
-          sold_by,
-          sale_items(
-            id,
-            product_name,
-            quantity,
-            unit_price,
-            subtotal,
-            owner_id
-          )
-        `
-        )
-        .order("created_at", { ascending: false });
-
-      if (fromDate) query = query.gte("created_at", `${fromDate}T00:00:00`);
-      if (toDate) query = query.lte("created_at", `${toDate}T23:59:59.999`);
-      if (!fromDate && !toDate) query = query.limit(50); // Default limit
-
-      let expQuery = supabase.from("expenses").select(`
-        *,
-        expense_allocations (
-          partner_id,
-          amount
-        )
-      `).order("created_at", { ascending: false });
-
-      if (fromDate) expQuery = expQuery.gte("created_at", `${fromDate}T00:00:00`);
-      if (toDate) expQuery = expQuery.lte("created_at", `${toDate}T23:59:59.999`);
-      if (!fromDate && !toDate) expQuery = expQuery.limit(50);
-
-      const [salesRes, expRes, partnersRes] = await Promise.all([
-        query,
-        expQuery,
-        supabase.from("partners").select("*").order("name"),
+      const [fetchedSales, fetchedSessions] = await Promise.all([
+        getSalesHistoryLocalFirst(fromDate || undefined, toDate || undefined),
+        getCashSessionsHistoryLocalFirst(fromDate || undefined, toDate || undefined),
       ]);
 
-      if (salesRes.error) throw salesRes.error;
-      if (expRes.error) throw expRes.error;
+      setSales(fetchedSales);
 
-      const fetchedPartners = (partnersRes.data || []) as Partner[];
-      setPartners(fetchedPartners);
-      setExpenses((expRes.data as unknown as ExpenseWithAllocations[]) || []);
-
-      const partnerMap: Record<string, Partner> = {};
-      for (const p of fetchedPartners) {
-        partnerMap[p.id] = p;
-        partnerMap[p.name] = p; 
-        const normName = p.name ? p.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "") : "";
-        if (normName) partnerMap[normName] = p;
-      }
-
-      const formattedSales: SaleDetailData[] = (salesRes.data || []).map(
-        (s: any) => {
-          const rawSoldBy = s.sold_by || "";
-          const normSoldBy = rawSoldBy.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-          const sold_by_partner = partnerMap[s.sold_by] || partnerMap[normSoldBy] || null;
-
-          return {
-            id: s.id,
-            created_at: s.created_at,
-            total: Number(s.total),
-            payment_method: s.payment_method,
-            sold_by_partner,
-            sale_items: (s.sale_items || []).map((item: any) => ({
-              ...item,
-              unit_price: Number(item.unit_price),
-              subtotal: Number(item.subtotal),
-              quantity: Number(item.quantity),
-              partner: partnerMap[item.owner_id] || null,
-            })),
-          };
-        }
+      const sessionIds = fetchedSessions.map((session) => session.id);
+      const reportsBySession = await Promise.all(
+        sessionIds.map((sessionId) => getCashSessionReportLocalFirst(sessionId))
       );
 
-      setSales(formattedSales);
+      const fetchedPartnersMap = new Map<string, Partner>();
+      reportsBySession.flat().forEach((reportRow) => {
+        const partner: Partner = {
+          id: reportRow.partner_id,
+          name: reportRow.partner,
+          display_name: reportRow.display_name,
+          color_hex: reportRow.color_hex,
+          is_expense_eligible: true,
+          created_at: reportRow.opened_at,
+        };
+        fetchedPartnersMap.set(partner.id, partner);
+        fetchedPartnersMap.set(partner.name, partner);
+      });
+
+      const fetchedExpenses = await Promise.all(
+        sessionIds.map((sessionId) => getExpensesBySessionLocalFirst(sessionId))
+      );
+
+      setPartners(Array.from(fetchedPartnersMap.values()).filter((value, index, array) =>
+        array.findIndex((current) => current.id === value.id) === index
+      ));
+      setExpenses(fetchedExpenses.flat() as unknown as ExpenseWithAllocations[]);
     } catch (err) {
       console.error("[VentasPage] fetch error:", err);
     } finally {

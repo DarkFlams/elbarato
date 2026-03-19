@@ -1,7 +1,6 @@
-/**
+﻿/**
  * @file product-table.tsx
- * @description Tabla de productos con paginacion server-side.
- * Usa PostgREST puro (sin RPCs) para manejar 10,000+ productos.
+ * @description Tabla de productos local-first con paginacion incremental.
  */
 
 "use client";
@@ -20,10 +19,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createClient } from "@/lib/supabase/client";
-import { ProductForm } from "./product-form";
+import { getCatalogProductCounts, getCatalogProducts } from "@/lib/local/catalog";
 import type { Partner, ProductWithOwner } from "@/types/database";
 import { cn } from "@/lib/utils";
+import { ProductForm } from "./product-form";
 import {
   getPartnerVisual,
   getStockTone,
@@ -43,7 +42,7 @@ function extractSizes(description: string | null): string[] {
   const match = description.match(/Tallas:\s*([^|]+)/i);
   const source = match?.[1] ?? description;
   const unique = new Set(
-    source.split(/[\s,;/|]+/g).map((s) => s.trim()).filter(Boolean)
+    source.split(/[\s,;/|]+/g).map((size) => size.trim()).filter(Boolean)
   );
   return Array.from(unique);
 }
@@ -69,8 +68,6 @@ export function ProductTable({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
   const [stockFilter, setStockFilter] = useState<"all" | "ok" | "low" | "out">("all");
-
-  // KPI counts
   const [totalCount, setTotalCount] = useState(0);
   const [outCount, setOutCount] = useState(0);
   const [lowCount, setLowCount] = useState(0);
@@ -79,205 +76,90 @@ export function ProductTable({
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentOffsetRef = useRef(0);
 
-  // ── Debounce search ──
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
       setDebouncedSearch(searchQuery);
     }, 350);
+
     return () => {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     };
   }, [searchQuery]);
 
-  // ── Build base query ──
-  const applyFilters = useCallback(
-    (query: ReturnType<ReturnType<typeof createClient>["from"]>) => {
-      let q = query.eq("is_active", true);
-
-      if (filterOwner) {
-        q = q.eq("owner_id", filterOwner);
-      }
-
-      if (debouncedSearch.trim()) {
-        const safeSearch = debouncedSearch.trim().replace(/[,"]/g, " ");
-        const term = `%${safeSearch}%`;
-        q = q.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
-      }
-
-      // Stock filter: "out" is easy server-side, "low"/"ok" need column comparison
-      // so we just filter "out" server-side and handle low/ok client-side
-      if (stockFilter === "out") {
-        q = q.lte("stock", 0);
-      } else if (stockFilter === "low" || stockFilter === "ok") {
-        // For low/ok we need stock > 0, then client-side filter
-        q = q.gt("stock", 0);
-      }
-
-      return q;
-    },
-    [filterOwner, debouncedSearch, stockFilter]
-  );
-
-  // ── Fetch KPI counts ──
   const fetchCounts = useCallback(async () => {
     try {
-      const supabase = createClient();
+      const counts = await getCatalogProductCounts({
+        search: debouncedSearch,
+        ownerId: filterOwner,
+      });
 
-      // Try RPC first (accurate low/ok counts via column comparison)
-      const { data: rpcData, error: rpcError } = await supabase.rpc(
-        "get_inventory_counts",
-        {
-          p_owner_id: filterOwner || null,
-          p_search: debouncedSearch.trim() || null,
-        }
-      );
-
-      if (!rpcError && rpcData) {
-        const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-        if (row) {
-          setTotalCount(Number(row.total_count));
-          setOutCount(Number(row.out_count));
-          setLowCount(Number(row.low_count));
-          setOkCount(Number(row.available_count));
-          return;
-        }
-      }
-
-      // Fallback: PostgREST head-only counts (no low/ok split)
-      const baseCount = () => {
-        let q = supabase
-          .from("products")
-          .select("*", { count: "exact", head: true })
-          .eq("is_active", true);
-        if (filterOwner) q = q.eq("owner_id", filterOwner);
-        if (debouncedSearch.trim()) {
-          const safeSearch = debouncedSearch.trim().replace(/[,"]/g, " ");
-          const term = `%${safeSearch}%`;
-          q = q.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
-        }
-        return q;
-      };
-
-      const [totalRes, outRes] = await Promise.all([
-        baseCount(),
-        baseCount().lte("stock", 0),
-      ]);
-
-      const total = totalRes.count ?? 0;
-      const out = outRes.count ?? 0;
-      setTotalCount(total);
-      setOutCount(out);
-      setLowCount(-1); // -1 = unavailable
-      setOkCount(total - out);
-    } catch (err) {
-      console.error("[ProductTable] count error:", err);
+      setTotalCount(Number(counts.totalCount || 0));
+      setOutCount(Number(counts.outCount || 0));
+      setLowCount(Number(counts.lowCount || 0));
+      setOkCount(Number(counts.availableCount || 0));
+    } catch (error) {
+      console.error("[ProductTable] count error:", error);
     }
-  }, [filterOwner, debouncedSearch]);
+  }, [debouncedSearch, filterOwner]);
 
-  // ── Fetch first page ──
   const fetchProducts = useCallback(async () => {
     setIsLoading(true);
     currentOffsetRef.current = 0;
+
     try {
-      const supabase = createClient();
-      const baseQuery = supabase
-        .from("products")
-        .select(
-          `
-          *,
-          owner:partners!products_owner_id_fkey (
-            id, name, display_name, color_hex
-          )
-        `
-        );
-
-      const { data, error } = await applyFilters(baseQuery)
-        .order("name")
-        .range(0, PAGE_SIZE - 1);
-
-      if (error) throw error;
-
-      let result = (data as unknown as ProductWithOwner[]) || [];
-
-      // Client-side filter for low/ok (column comparison not possible in PostgREST)
-      if (stockFilter === "low") {
-        result = result.filter((p) => p.stock > 0 && p.stock <= p.min_stock);
-      } else if (stockFilter === "ok") {
-        result = result.filter((p) => p.stock > p.min_stock);
-      }
+      const result = await getCatalogProducts({
+        search: debouncedSearch,
+        ownerId: filterOwner,
+        stockFilter,
+        limit: PAGE_SIZE,
+        offset: 0,
+      });
 
       setProducts(result);
-      setHasMore((data?.length ?? 0) === PAGE_SIZE);
+      setHasMore(result.length === PAGE_SIZE);
       currentOffsetRef.current = PAGE_SIZE;
-    } catch (err) {
-      console.error("[ProductTable] fetch error:", err);
+    } catch (error) {
+      console.error("[ProductTable] fetch error:", error);
     } finally {
       setIsLoading(false);
     }
-  }, [applyFilters, stockFilter]);
+  }, [debouncedSearch, filterOwner, stockFilter]);
 
-  // ── Load more ──
   const loadMore = useCallback(async () => {
     if (isLoadingMore || !hasMore) return;
+
     setIsLoadingMore(true);
     try {
-      const supabase = createClient();
-      const from = currentOffsetRef.current;
-      const baseQuery = supabase
-        .from("products")
-        .select(
-          `
-          *,
-          owner:partners!products_owner_id_fkey (
-            id, name, display_name, color_hex
-          )
-        `
-        );
-
-      const { data, error } = await applyFilters(baseQuery)
-        .order("name")
-        .range(from, from + PAGE_SIZE - 1);
-
-      if (error) throw error;
-
-      let batch = (data as unknown as ProductWithOwner[]) || [];
-
-      if (stockFilter === "low") {
-        batch = batch.filter((p) => p.stock > 0 && p.stock <= p.min_stock);
-      } else if (stockFilter === "ok") {
-        batch = batch.filter((p) => p.stock > p.min_stock);
-      }
+      const offset = currentOffsetRef.current;
+      const batch = await getCatalogProducts({
+        search: debouncedSearch,
+        ownerId: filterOwner,
+        stockFilter,
+        limit: PAGE_SIZE,
+        offset,
+      });
 
       setProducts((prev) => [...prev, ...batch]);
-      setHasMore((data?.length ?? 0) === PAGE_SIZE);
-      currentOffsetRef.current = from + PAGE_SIZE;
-    } catch (err) {
-      console.error("[ProductTable] loadMore error:", err);
+      setHasMore(batch.length === PAGE_SIZE);
+      currentOffsetRef.current = offset + PAGE_SIZE;
+    } catch (error) {
+      console.error("[ProductTable] loadMore error:", error);
     } finally {
       setIsLoadingMore(false);
     }
-  }, [applyFilters, stockFilter, isLoadingMore, hasMore]);
+  }, [debouncedSearch, filterOwner, hasMore, isLoadingMore, stockFilter]);
 
-  // ── Re-fetch on filter/search change ──
   useEffect(() => {
-    fetchProducts();
-    fetchCounts();
-  }, [debouncedSearch, filterOwner, stockFilter, refreshTrigger]);
-
-  // Compute approximate low/ok from loaded products + total/out from server
-  const loadedLow = products.filter(
-    (p) => p.stock > 0 && p.stock <= p.min_stock
-  ).length;
-  const loadedOk = products.filter(
-    (p) => p.stock > p.min_stock
-  ).length;
+    void fetchProducts();
+    void fetchCounts();
+  }, [fetchCounts, fetchProducts, refreshTrigger]);
 
   const hasActiveFilters = Boolean(searchQuery || filterOwner || stockFilter !== "all");
 
   const refresh = () => {
-    fetchProducts();
-    fetchCounts();
+    void fetchProducts();
+    void fetchCounts();
   };
 
   return (
@@ -294,7 +176,6 @@ export function ProductTable({
         </div>
 
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          {/* Owner Filters */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setFilterOwner(null)}
@@ -341,10 +222,11 @@ export function ProductTable({
             })}
           </div>
 
-          {/* Status Filters & Actions */}
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setStockFilter(stockFilter === "low" || stockFilter === "out" ? "all" : "low")}
+              onClick={() =>
+                setStockFilter(stockFilter === "low" || stockFilter === "out" ? "all" : "low")
+              }
               className={cn(
                 "flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-all",
                 stockFilter === "low" || stockFilter === "out"
@@ -385,8 +267,7 @@ export function ProductTable({
           </div>
         </div>
 
-        {/* KPI Bar */}
-        <div className="flex flex-wrap items-center gap-1 text-sm mt-3 pt-3 border-t border-slate-100">
+        <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-3 text-sm">
           <button
             onClick={() => setStockFilter("all")}
             className={cn(
@@ -409,7 +290,7 @@ export function ProductTable({
             )}
           >
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="font-semibold">{okCount >= 0 ? okCount : totalCount - outCount}</span> disponibles
+            <span className="font-semibold">{okCount}</span> disponibles
           </button>
           <button
             onClick={() => setStockFilter(stockFilter === "low" ? "all" : "low")}
@@ -421,7 +302,7 @@ export function ProductTable({
             )}
           >
             <span className="h-2 w-2 rounded-full bg-amber-500" />
-            <span className="font-semibold">{lowCount >= 0 ? lowCount : "—"}</span> por agotarse
+            <span className="font-semibold">{lowCount}</span> por agotarse
           </button>
           <button
             onClick={() => setStockFilter(stockFilter === "out" ? "all" : "out")}
@@ -438,7 +319,7 @@ export function ProductTable({
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
+      <ScrollArea className="min-h-0 flex-1">
         {isLoading ? (
           <div className="flex h-[200px] items-center justify-center">
             <RefreshCw className="h-5 w-5 animate-spin text-slate-400" />
@@ -483,7 +364,7 @@ export function ProductTable({
                       {product.sku && (
                         <>
                           <span className="text-slate-300">•</span>
-                          <span className="font-mono text-[10px] bg-slate-100 px-1 rounded">
+                          <span className="rounded bg-slate-100 px-1 font-mono text-[10px]">
                             {product.sku}
                           </span>
                         </>
@@ -513,7 +394,7 @@ export function ProductTable({
                     )}
                   </div>
 
-                  <div className="w-24 shrink-0 flex items-center justify-center">
+                  <div className="flex w-24 shrink-0 items-center justify-center">
                     {getStockTone(product.stock, product.min_stock) !== "ok" && (
                       <Badge
                         variant="outline"
@@ -529,14 +410,9 @@ export function ProductTable({
                       ${Number(product.sale_price).toFixed(2)}
                     </p>
                     <p className="text-xs text-slate-500">
-                      Stock:{" "}
-                      <span className="font-semibold text-slate-700">
-                        {product.stock}
-                      </span>
+                      Stock: <span className="font-semibold text-slate-700">{product.stock}</span>
                     </p>
-                    <p className="text-[11px] text-slate-400">
-                      Min: {product.min_stock}
-                    </p>
+                    <p className="text-[11px] text-slate-400">Min: {product.min_stock}</p>
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1">
@@ -569,7 +445,6 @@ export function ProductTable({
               );
             })}
 
-            {/* Load more */}
             {hasMore && (
               <div className="flex justify-center py-4">
                 <Button

@@ -22,7 +22,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
-import { createClient } from "@/lib/supabase/client";
+import {
+  getCashSessionReportLocalFirst,
+  getCashSessionsHistoryLocalFirst,
+  getExpensesBySessionLocalFirst,
+} from "@/lib/local/history";
 import { PARTNERS } from "@/lib/constants";
 import { exportToExcel, exportToPdf } from "@/lib/export-utils";
 import type { ReportData } from "@/lib/export-utils";
@@ -39,6 +43,17 @@ interface SessionWithReport extends CashSession {
   }[];
 }
 
+type SessionExpenseRow = {
+  description: string;
+  amount: number;
+  scope: string;
+  expense_allocations?: Array<{
+    amount: number;
+    partner: { display_name: string };
+  }>;
+  created_at: string;
+};
+
 function formatDateInput(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -53,27 +68,10 @@ export default function ReportesPage() {
   const fetchSessions = useCallback(async () => {
     setIsLoading(true);
     try {
-      const supabase = createClient();
-      let query = supabase
-        .from("cash_sessions")
-        .select("*")
-        .order("opened_at", { ascending: false });
-
-      if (fromDate) {
-        query = query.gte("opened_at", `${fromDate}T00:00:00`);
-      }
-
-      if (toDate) {
-        query = query.lte("opened_at", `${toDate}T23:59:59.999`);
-      }
-
-      if (!fromDate && !toDate) {
-        query = query.limit(30);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
+      const data = await getCashSessionsHistoryLocalFirst(
+        fromDate || undefined,
+        toDate || undefined
+      );
       setSessions((data as CashSession[]) || []);
     } catch (err) {
       console.error("[ReportesPage] fetchSessions error:", err);
@@ -112,40 +110,19 @@ export default function ReportesPage() {
     if (session?.report) return;
 
     try {
-      const supabase = createClient();
+      const [report, expData] = await Promise.all([
+        getCashSessionReportLocalFirst(sessionId),
+        getExpensesBySessionLocalFirst(sessionId),
+      ]);
 
-      const { data: report } = await supabase
-        .from("v_cash_session_report")
-        .select("*")
-        .eq("session_id", sessionId);
-
-      const { data: expData } = await supabase
-        .from("expenses")
-        .select(
-          `
-          *,
-          expense_allocations (
-            amount,
-            partner:partners!expense_allocations_partner_id_fkey (display_name)
-          )
-        `
-        )
-        .eq("cash_session_id", sessionId)
-        .order("created_at", { ascending: false });
-
-      const formattedExpenses = (expData || []).map((e: Record<string, unknown>) => ({
-        description: e.description as string,
+      const formattedExpenses = ((expData as SessionExpenseRow[]) || []).map((e) => ({
+        description: e.description,
         amount: Number(e.amount),
-        scope: e.scope as string,
-        allocations: (
-          (e.expense_allocations as Array<{
-            partner: { display_name: string };
-            amount: number;
-          }>) || []
-        )
+        scope: e.scope,
+        allocations: (e.expense_allocations || [])
           .map((a) => `${a.partner.display_name}: $${Number(a.amount).toFixed(2)}`)
           .join(", "),
-        time: new Date(e.created_at as string).toLocaleTimeString("es-EC", {
+        time: new Date(e.created_at).toLocaleTimeString("es-EC", {
           hour: "2-digit",
           minute: "2-digit",
         }),

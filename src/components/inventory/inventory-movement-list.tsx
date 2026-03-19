@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
-import { createClient } from "@/lib/supabase/client";
+import { listInventoryMovementsLocalFirst } from "@/lib/local/inventory-movements";
 import { cn } from "@/lib/utils";
 import type {
   InventoryMovementWithProduct,
@@ -92,26 +92,7 @@ export function InventoryMovementList({
   const fetchMovements = useCallback(async () => {
     setIsLoading(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("inventory_movements")
-        .select(
-          `
-          *,
-          product:products!inventory_movements_product_id_fkey (
-            id,
-            name,
-            barcode,
-            owner:partners!products_owner_id_fkey (
-              id, name, display_name, color_hex, created_at
-            )
-          )
-        `
-        )
-        .order("created_at", { ascending: false })
-        .limit(200);
-
-      if (error) throw error;
+      const data = await listInventoryMovementsLocalFirst();
       setMovements((data as InventoryMovementWithProduct[]) || []);
     } catch (err) {
       console.error("[InventoryMovementList] fetchMovements error:", err);

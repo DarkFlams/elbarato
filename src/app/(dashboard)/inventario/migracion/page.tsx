@@ -30,7 +30,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createClient } from "@/lib/supabase/client";
+import {
+  getMigrationExistingProductsLocalFirst,
+  getMigrationPartnersLocalFirst,
+  importMigrationProductLocalFirst,
+} from "@/lib/local/migration-import";
 import type { Partner } from "@/types/database";
 import { toast } from "sonner";
 
@@ -231,29 +235,13 @@ export default function InventarioMigracionPage() {
 
   const fetchContext = useCallback(async () => {
     try {
-      const supabase = createClient();
-      const { data: p } = await supabase.from("partners").select("*").order("name");
-      const partnerData = (p as Partner[]) || [];
+      const partnerData = await getMigrationPartnersLocalFirst();
       setPartners(partnerData);
       if (!defaultOwnerId && partnerData.length > 0) {
         setDefaultOwnerId(partnerData[0].id);
       }
 
-      // Paginated fetch of existing products (bypass 1000 limit)
-      const PAGE_SIZE = 1000;
-      let allExisting: ExistingProduct[] = [];
-      let from = 0;
-      let hasMore = true;
-      while (hasMore) {
-        const { data: pr } = await supabase
-          .from("products")
-          .select("id, barcode")
-          .range(from, from + PAGE_SIZE - 1);
-        const batch = (pr as ExistingProduct[]) || [];
-        allExisting = allExisting.concat(batch);
-        hasMore = batch.length === PAGE_SIZE;
-        from += PAGE_SIZE;
-      }
+      const allExisting = await getMigrationExistingProductsLocalFirst();
       setExistingProducts(allExisting);
     } catch (err) {
       console.error("[Migration] fetchContext error:", err);
@@ -336,7 +324,6 @@ export default function InventarioMigracionPage() {
 
     let created = 0, updated = 0, failed = 0, ignored = 0;
     const errors: string[] = [];
-    const supabase = createClient();
 
     setIsImporting(true);
     setSummary(null);
@@ -362,25 +349,18 @@ export default function InventarioMigracionPage() {
 
       try {
         const existing = barcodeMap.get(m.barcode.toLowerCase());
-        const { data, error } = await supabase.rpc("upsert_product_with_movement", {
-          p_product_id: existing?.id ?? null,
-          p_barcode: m.barcode,
-          p_name: m.name,
-          p_description: null,
-          p_category: null,
-          p_owner_id: m.ownerId,
-          p_purchase_price: 0,
-          p_sale_price: m.salePrice,
-          p_stock: m.stock,
-          p_min_stock: m.minStock,
-          p_is_active: true,
-          p_sku: m.codigo,
+        const result = await importMigrationProductLocalFirst({
+          productId: existing?.id ?? null,
+          barcode: m.barcode,
+          sku: m.codigo,
+          name: m.name,
+          description: null,
+          ownerId: m.ownerId,
+          salePrice: m.salePrice,
+          stock: m.stock,
+          minStock: m.minStock,
         });
-
-        if (error) throw error;
-
-        const result = Array.isArray(data) ? data[0] : data;
-        const productId = String(result?.product_id || "");
+        const productId = String(result?.productId || "");
 
         if (existing) updated++;
         else created++;

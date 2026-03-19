@@ -14,46 +14,85 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getLocalCatalogBootstrapState } from "@/lib/local/bootstrap";
 import {
-  getOfflineQueue,
-  getOfflineQueueStats,
-  removeOfflineOperation,
-  requeueAllFailedOfflineOperations,
-  requeueOfflineOperation,
-  subscribeOfflineQueue,
-} from "@/lib/offline/queue";
-import type { OfflineOperation } from "@/lib/offline/types";
+  getSyncQueueStatsLocalFirst,
+  listSyncQueueLocalFirst,
+  removeSyncQueueItemLocalFirst,
+  requeueAllFailedSyncQueueItemsLocalFirst,
+  requeueSyncQueueItemLocalFirst,
+  type LocalSyncQueueItem,
+} from "@/lib/local/sync-queue";
 import { useOfflineSync } from "@/hooks/use-offline-sync";
 
-function readSortedOperations() {
-  return getOfflineQueue().sort((a, b) => b.created_at.localeCompare(a.created_at));
+async function readSortedOperations() {
+  const operations = await listSyncQueueLocalFirst();
+  return operations.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function formatOperationType(operation: OfflineOperation) {
-  return operation.type === "register_sale" ? "Venta" : "Gasto";
+function formatOperationType(operation: LocalSyncQueueItem) {
+  if (operation.entityName === "sales") return "Venta";
+  if (operation.entityName === "expenses") return "Gasto";
+  if (operation.entityName === "products" && operation.operationType === "create_remate") return "Remate";
+  if (operation.entityName === "products" && operation.operationType === "dispose") return "Desecho";
+  if (operation.entityName === "products") return "Producto";
+  if (operation.entityName === "inventory_movements") return "Inventario";
+  if (operation.entityName === "cash_sessions" && operation.operationType === "close") return "Cierre Caja";
+  if (operation.entityName === "cash_sessions") return "Apertura Caja";
+  return `${operation.entityName}:${operation.operationType}`;
 }
 
-function formatOperationSummary(operation: OfflineOperation) {
-  if (operation.type === "register_sale") {
-    const total = operation.payload.p_items.reduce(
-      (sum, item) => sum + item.quantity * item.unit_price,
-      0
-    );
-    const paymentLabel =
-      operation.payload.p_payment_method === "cash"
-        ? "Efectivo"
-        : "Transferencia";
-    return `${paymentLabel} - ${operation.payload.p_items.length} item(s) - $${total.toFixed(
-      2
-    )}`;
+function formatOperationSummary(operation: LocalSyncQueueItem) {
+  try {
+    const payload = JSON.parse(operation.payloadJson) as Record<string, unknown>;
+
+    if (operation.entityName === "sales") {
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      const total = items.reduce((sum, item) => {
+        const row = item as { quantity?: number; unitPrice?: number };
+        return sum + Number(row.quantity ?? 0) * Number(row.unitPrice ?? 0);
+      }, 0);
+      const paymentMethod =
+        payload.paymentMethod === "cash" ? "Efectivo" : "Transferencia";
+      return `${paymentMethod} - ${items.length} item(s) - $${total.toFixed(2)}`;
+    }
+
+    if (operation.entityName === "expenses") {
+      return `${String(payload.description ?? "Sin descripcion")} - $${Number(
+        payload.amount ?? 0
+      ).toFixed(2)}`;
+    }
+
+    if (operation.entityName === "products" && operation.operationType === "create_remate") {
+      return `Remate - $${Number(payload.clearancePrice ?? 0).toFixed(2)} - ${Number(
+        payload.stock ?? 0
+      )} unidad(es)`;
+    }
+
+    if (operation.entityName === "products") {
+      return `${String(payload.name ?? "Producto")} - barcode ${String(
+        payload.barcode ?? "-"
+      )}`;
+    }
+
+    if (operation.entityName === "inventory_movements") {
+      return `${String(payload.operation ?? "adjust")} - ${Number(
+        payload.quantity ?? 0
+      )} unidad(es)`;
+    }
+
+    if (operation.entityName === "cash_sessions" && operation.operationType === "close") {
+      return `Cierre de caja - efectivo final $${Number(payload.closingCash ?? 0).toFixed(2)}`;
+    }
+
+    if (operation.entityName === "cash_sessions") {
+      return `Apertura de caja - efectivo inicial $${Number(payload.openingCash ?? 0).toFixed(2)}`;
+    }
+  } catch {
+    // fallback below
   }
 
-  const amount = Number(operation.payload.p_amount ?? 0);
-  const scope =
-    operation.payload.p_scope === "shared" ? "Compartido" : "Individual";
-  const description = operation.payload.p_description ?? "Sin descripcion";
-
-  return `${description} - $${amount.toFixed(2)} - ${scope}`;
+  return `${operation.entityName} - ${operation.operationType}`;
 }
 
 function formatDateTime(value: string | null) {
@@ -69,19 +108,42 @@ function formatDateTime(value: string | null) {
 }
 
 export default function OfflinePage() {
-  const [operations, setOperations] = useState<OfflineOperation[]>(
-    readSortedOperations
-  );
+  const [operations, setOperations] = useState<LocalSyncQueueItem[]>([]);
+  const [catalogState, setCatalogState] = useState<{
+    ready: boolean;
+    seeded: boolean;
+    requiresInternet: boolean;
+    productCount: number;
+  } | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [isSyncingManual, setIsSyncingManual] = useState(false);
-  const { isOnline, isSyncing, runSync, pendingCount, failedCount, totalCount } =
+  const { isOnline, isSyncing, runSync, syncSupported, pendingCount, failedCount, totalCount } =
     useOfflineSync();
 
   useEffect(() => {
-    const unsubscribe = subscribeOfflineQueue(() => {
-      setOperations(readSortedOperations());
-    });
-    return unsubscribe;
+    let isCancelled = false;
+
+    const load = async () => {
+      const [items, nextCatalogState] = await Promise.all([
+        readSortedOperations(),
+        getLocalCatalogBootstrapState(),
+      ]);
+
+      if (!isCancelled) {
+        setOperations(items);
+        setCatalogState(nextCatalogState);
+      }
+    };
+
+    void load();
+    const timer = window.setInterval(() => {
+      void load();
+    }, 3000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const handleSyncNow = async () => {
@@ -91,15 +153,16 @@ export default function OfflinePage() {
     }
 
     setIsSyncingManual(true);
-    const before = getOfflineQueueStats();
+    const before = totalCount;
     await runSync();
-    const after = getOfflineQueueStats();
+    const afterStats = await getSyncQueueStatsLocalFirst();
+    setOperations(await readSortedOperations());
     setIsSyncingManual(false);
 
-    const syncedCount = Math.max(0, before.total - after.total);
+    const syncedCount = Math.max(0, before - afterStats.total);
     if (syncedCount > 0) {
       toast.success(`Sincronizacion completada. ${syncedCount} operacion(es).`);
-    } else if (after.failed > 0) {
+    } else if (afterStats.failed > 0) {
       toast.warning("Sincronizacion terminada con errores en cola.");
     } else {
       toast.message("No habia operaciones para sincronizar.");
@@ -113,7 +176,7 @@ export default function OfflinePage() {
     }
 
     setActioningId(operationId);
-    const updated = requeueOfflineOperation(operationId);
+    const updated = await requeueSyncQueueItemLocalFirst(operationId);
     if (!updated) {
       setActioningId(null);
       toast.error("No se encontro la operacion.");
@@ -121,7 +184,9 @@ export default function OfflinePage() {
     }
 
     await runSync();
-    const stillExists = getOfflineQueue().find((op) => op.id === operationId);
+    const refreshed = await readSortedOperations();
+    setOperations(refreshed);
+    const stillExists = refreshed.find((op) => op.id === operationId);
     setActioningId(null);
 
     if (!stillExists) {
@@ -131,7 +196,7 @@ export default function OfflinePage() {
 
     if (stillExists.status === "failed") {
       toast.error("La operacion sigue fallando.", {
-        description: stillExists.last_error ?? "Error desconocido",
+        description: stillExists.lastError ?? "Error desconocido",
       });
       return;
     }
@@ -140,7 +205,7 @@ export default function OfflinePage() {
   };
 
   const handleRetryFailed = async () => {
-    const count = requeueAllFailedOfflineOperations();
+    const count = await requeueAllFailedSyncQueueItemsLocalFirst();
     if (count === 0) {
       toast.message("No hay operaciones fallidas para reintentar.");
       return;
@@ -156,8 +221,9 @@ export default function OfflinePage() {
     await handleSyncNow();
   };
 
-  const handleRemove = (operationId: string) => {
-    removeOfflineOperation(operationId);
+  const handleRemove = async (operationId: string) => {
+    await removeSyncQueueItemLocalFirst(operationId);
+    setOperations(await readSortedOperations());
     toast.success("Operacion eliminada de la cola local.");
   };
 
@@ -207,7 +273,7 @@ export default function OfflinePage() {
           <Button
             variant="outline"
             onClick={() => void handleRetryFailed()}
-            disabled={failedCount === 0}
+            disabled={failedCount === 0 || !syncSupported}
             className="h-9"
           >
             <RotateCcw className="mr-2 h-4 w-4" />
@@ -216,7 +282,7 @@ export default function OfflinePage() {
 
           <Button
             onClick={() => void handleSyncNow()}
-            disabled={!isOnline || totalCount === 0 || isSyncing || isSyncingManual}
+            disabled={!syncSupported || !isOnline || totalCount === 0 || isSyncing || isSyncingManual}
             className="h-9 bg-slate-900 text-white hover:bg-slate-800"
           >
             <RefreshCw
@@ -229,7 +295,23 @@ export default function OfflinePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            Catalogo Local
+          </p>
+          <p className="mt-2 text-2xl font-bold text-slate-900">
+            {catalogState?.productCount ?? 0}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {catalogState?.ready
+              ? "Base local lista"
+              : catalogState?.seeded
+              ? "Sembrado parcial"
+              : "Pendiente de descarga"}
+          </p>
+        </div>
+
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
             Pendientes
@@ -251,6 +333,40 @@ export default function OfflinePage() {
           <p className="mt-2 text-2xl font-bold text-slate-900">{totalCount}</p>
         </div>
       </div>
+
+      {catalogState && (
+        <div
+          className={
+            catalogState.ready
+              ? "rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
+              : "rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold">
+                {catalogState.ready
+                  ? "La base local del inventario ya esta lista en esta PC."
+                  : "La base local todavia no esta completa."}
+              </p>
+              <p className="mt-1 text-xs opacity-90">
+                Productos guardados localmente: {catalogState.productCount}
+              </p>
+            </div>
+
+            <Badge
+              variant="outline"
+              className={
+                catalogState.ready
+                  ? "border-emerald-300 bg-white text-emerald-700"
+                  : "border-amber-300 bg-white text-amber-700"
+              }
+            >
+              {catalogState.ready ? "Listo para offline" : "Falta bootstrap"}
+            </Badge>
+          </div>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -282,11 +398,7 @@ export default function OfflinePage() {
                     <div className="mb-1 flex flex-wrap items-center gap-2">
                       <Badge
                         variant="outline"
-                        className={
-                          operation.type === "register_sale"
-                            ? "border-sky-200 bg-sky-50 text-sky-700"
-                            : "border-violet-200 bg-violet-50 text-violet-700"
-                        }
+                        className="border-sky-200 bg-sky-50 text-sky-700"
                       >
                         {formatOperationType(operation)}
                       </Badge>
@@ -309,17 +421,17 @@ export default function OfflinePage() {
                       {formatOperationSummary(operation)}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      creado: {formatDateTime(operation.created_at)}
+                      creado: {formatDateTime(operation.createdAt)}
                     </p>
-                    {operation.last_attempt_at && (
+                    {operation.updatedAt && operation.updatedAt !== operation.createdAt && (
                       <p className="text-xs text-slate-500">
-                        ultimo intento: {formatDateTime(operation.last_attempt_at)}
+                        ultima actualizacion: {formatDateTime(operation.updatedAt)}
                       </p>
                     )}
-                    {operation.last_error && (
+                    {operation.lastError && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-rose-600">
                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span className="break-words">{operation.last_error}</span>
+                        <span className="break-words">{operation.lastError}</span>
                       </p>
                     )}
                   </div>
@@ -330,6 +442,7 @@ export default function OfflinePage() {
                       variant="outline"
                       onClick={() => void handleRetryOne(operation.id)}
                       disabled={
+                        !syncSupported ||
                         !isOnline ||
                         actioningId === operation.id ||
                         (isSyncing || isSyncingManual)
@@ -352,7 +465,7 @@ export default function OfflinePage() {
                       size="sm"
                       variant="outline"
                       className="border-rose-200 text-rose-700 hover:bg-rose-50"
-                      onClick={() => handleRemove(operation.id)}
+                      onClick={() => void handleRemove(operation.id)}
                     >
                       <Trash2 className="mr-1 h-3.5 w-3.5" />
                       Quitar

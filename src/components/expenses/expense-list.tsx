@@ -17,7 +17,7 @@ import { Receipt, Users, User, Clock, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { createClient } from "@/lib/supabase/client";
+import { getSessionExpensesLocalFirst } from "@/lib/local/cash-expenses";
 import { PARTNERS } from "@/lib/constants";
 import type { CashSession, Expense, ExpenseAllocation, Partner } from "@/types/database";
 
@@ -54,26 +54,9 @@ export function ExpenseList({
 
     setIsLoading(true);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("expenses")
-        .select(
-          `
-          *,
-          expense_allocations (
-            *,
-            partner:partners!expense_allocations_partner_id_fkey (
-              id, name, display_name, color_hex
-            )
-          )
-        `
-        )
-        .eq("cash_session_id", cashSession.id)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-
-      const typed = (data as unknown as ExpenseWithAllocations[]) || [];
+      const typed = (await getSessionExpensesLocalFirst(
+        cashSession.id
+      )) as unknown as ExpenseWithAllocations[];
       setExpenses(typed);
       setTotalExpenses(typed.reduce((sum, e) => sum + Number(e.amount), 0));
     } catch (err) {

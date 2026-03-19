@@ -2,7 +2,15 @@
 
 Documento de contexto operativo para no perder continuidad entre sesiones.
 
-Ultima actualizacion: 2026-03-18
+Nota importante:
+
+- Este archivo queda como bitacora historica y contexto general.
+- La prioridad actual del proyecto ya no es expandir modulos.
+- La prioridad actual es pasar a desktop lo que ya existe hoy, sin recortar funciones ni rehacer la logica.
+- La prioridad tecnica actual es modelo `local-first` total: la PC opera primero y Supabase sincroniza despues.
+- El plan activo de ejecucion pasa a ser `docs/MIGRACION_DESKTOP.md`.
+
+Ultima actualizacion: 2026-03-19
 
 ## 1. Vision del producto
 
@@ -182,13 +190,32 @@ Entregables:
 - monitoreo minimo;
 - validacion en moviles reales.
 
+## Fase 7. Migracion desktop con Tauri (paridad total)
+
+Objetivo: mover el POS a aplicacion de Windows usando Tauri v2 con operacion `local-first` total.
+
+Entregables:
+
+- shell desktop Tauri sobre la app actual;
+- SQLite local como base principal del exe;
+- inventario, ventas y gastos viviendo primero en PC;
+- impresion silenciosa nativa via Rust;
+- sincronizacion en segundo plano con Supabase;
+- operacion diaria en caja sin dependencia de internet.
+
+Estado actual:
+
+- plan detallado actualizado a Tauri en `docs/MIGRACION_DESKTOP.md`.
+- esta es la prioridad principal del proyecto.
+- no se deben abrir nuevas lineas funcionales hasta completar la migracion base a desktop.
+- SQLite local ya no es fase futura: pasa a ser parte central del plan.
+
 ## 5. Backlog priorizado
 
-1. Corregir documentacion base y mantener este archivo vivo.
-2. Extender reportes por rango de fechas.
-3. Endurecer integridad de datos y validaciones SQL para evitar inconsistencias.
-4. Mejorar seguridad y politicas de acceso en Supabase con enfoque pragmatica.
-5. Disenar el modulo de asistente de inventario con alcance claro.
+1. Convertir el sistema actual en aplicacion desktop sin perder funciones ni datos.
+2. Pasar todo lo operativo a modelo local-first total.
+3. Mantener impresion, caja, gastos e inventario estables durante la migracion.
+4. Solo despues de eso reabrir mejoras o nuevas funciones.
 
 ## 6. Riesgos y deuda tecnica
 
@@ -197,6 +224,30 @@ Entregables:
 - El `service worker` es basico y no conviene considerarlo solucion offline completa.
 - El lint sigue mostrando errores pendientes fuera del flujo critico de caja.
 - La documentacion tecnica todavia esta naciendo.
+
+### 2026-03-19 - Inicio de base local en Tauri
+
+Resumen:
+
+- Se deja de tratar lo local como una mejora futura y se inicia la base local real del exe.
+- Se integra SQLite embebido dentro de `src-tauri` para que la app pueda operar en otra PC sin depender de librerias externas.
+- El shell de Tauri ahora crea automaticamente la base local al arrancar.
+- Se crea schema espejo inicial para ventas, gastos, inventario, caja y sincronizacion.
+
+Archivos tocados:
+
+- `src-tauri/Cargo.toml`
+- `src-tauri/src/database.rs`
+- `src-tauri/src/lib.rs`
+- `docs/MIGRACION_DESKTOP.md`
+
+Validacion:
+
+- `cargo check` OK en `src-tauri`.
+
+Siguiente paso recomendado:
+
+- pasar lectura de catalogos (`partners`, `products`) a SQLite para que inventario y caja empiecen a abrir desde la PC.
 
 ## 7. Regla de trabajo para proximas sesiones
 
@@ -611,3 +662,22 @@ Validacion:
 Siguiente paso recomendado:
 
 - completar fase 3 con telemetria basica (ultimo sync exitoso, cantidad sincronizada por corrida y contador de errores recurrentes).
+
+### 2026-03-19 - Plan formal de migracion a desktop
+
+Resumen:
+
+- Se define una estrategia de migracion a app de escritorio sin reducir alcance funcional.
+- Se confirma enfoque de paridad total: mismas reglas de negocio y mismos modulos del POS.
+- Se documentan fases D0 a D8, incluyendo hardware, offline real, sync y rollout.
+- Se documentan riesgos reales y mitigaciones para evitar perdida de datos o duplicados.
+- Se fija que el objetivo inmediato es transformar lo ya construido, no ampliar producto.
+
+Archivos tocados:
+
+- `docs/MIGRACION_DESKTOP.md`
+- `docs/PLAN_MAESTRO.md`
+
+Siguiente paso recomendado:
+
+- iniciar Fase D0: snapshot de Supabase, baseline estable y checklist de rollback.

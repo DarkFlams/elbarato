@@ -1,19 +1,6 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "POS Tienda de Ropa",
@@ -34,13 +21,23 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
+      <body className="antialiased">
         {children}
         <script
           dangerouslySetInnerHTML={{
             __html: `
+              const isTauriRuntime =
+                navigator.userAgent.includes('Tauri') ||
+                '__TAURI_INTERNALS__' in window;
+
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
+                window.addEventListener('load', async () => {
+                  if (isTauriRuntime) {
+                    const registrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
+                    await Promise.all(registrations.map((registration) => registration.unregister()));
+                    return;
+                  }
+
                   navigator.serviceWorker.register('/sw.js').catch(() => {});
                 });
               }

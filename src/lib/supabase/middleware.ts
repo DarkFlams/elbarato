@@ -1,7 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isAuthBypassEnabled } from "@/lib/auth-mode";
 
 export async function updateSession(request: NextRequest) {
+  if (isAuthBypassEnabled()) {
+    return NextResponse.next({ request });
+  }
+
   // Skip auth check if Supabase is not configured
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
