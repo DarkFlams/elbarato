@@ -90,10 +90,36 @@ export function ProductSearch() {
     inputRef.current?.blur();
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && results.length === 1 && !isSearching) {
+  const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
       event.preventDefault();
-      handleSelect(results[0]);
+      
+      const searchTerm = query.trim();
+      if (!searchTerm) return;
+
+      if (!isSearching && results.length > 0) {
+        handleSelect(results[0]);
+      } else {
+        setIsSearching(true);
+        try {
+          const data = await getCatalogProducts({
+            search: searchTerm,
+            limit: 8,
+            offset: 0,
+            stockFilter: "all",
+          });
+          
+          if (data.length > 0) {
+            handleSelect(data[0]);
+          } else {
+            toast.error(`No se encontró ningún producto para: ${searchTerm}`);
+          }
+        } catch (error) {
+          console.error("[ProductSearch] instant search error:", error);
+        } finally {
+          setIsSearching(false);
+        }
+      }
     }
   };
 
@@ -107,7 +133,7 @@ export function ProductSearch() {
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Buscar producto por nombre o codigo..."
-          className="h-11 border-slate-200 bg-white pl-9 pr-8 shadow-sm transition-colors focus:border-indigo-500 focus:ring-indigo-500/20"
+          className="h-9 border-slate-200 bg-white pl-9 pr-8 text-sm shadow-sm transition-colors focus:border-indigo-500 focus:ring-indigo-500/20"
         />
 
         {query && (
@@ -134,7 +160,7 @@ export function ProductSearch() {
             <button
               key={product.id}
               onClick={() => handleSelect(product)}
-              className="flex w-full items-center border-b border-slate-100 px-3 py-2.5 text-left transition-colors hover:bg-slate-50 last:border-0"
+              className="flex w-full items-center border-b border-slate-100 px-3 py-2 text-left transition-colors hover:bg-slate-50 last:border-0"
             >
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-slate-900">{product.name}</p>
@@ -170,3 +196,4 @@ export function ProductSearch() {
     </div>
   );
 }
+

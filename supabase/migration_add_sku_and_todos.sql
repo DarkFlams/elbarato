@@ -12,7 +12,7 @@ ALTER TYPE partner_enum ADD VALUE IF NOT EXISTS 'todos';
 
 -- 3. Insert 'Todos' partner (idempotent)
 INSERT INTO partners (name, display_name, color_hex)
-VALUES ('todos', 'Todos', '#8B7A62')
+VALUES ('todos', 'Medias', '#8B7A62')
 ON CONFLICT (name) DO NOTHING;
 
 -- 4. Update upsert_product_with_movement to support SKU

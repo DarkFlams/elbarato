@@ -19,10 +19,12 @@ const PARTNER_PRESETS: Record<string, PartnerPreset> = {
     color: "#4C6FFF",
   },
   todos: {
-    displayName: "Todos",
+    displayName: "Medias",
     color: "#8B7A62",
   },
 };
+
+const PARTNER_DISPLAY_ORDER = ["rosa", "lorena", "yadira", "todos"] as const;
 
 function normalizePartnerKey(value: string | null | undefined): string {
   return (value || "")
@@ -30,6 +32,14 @@ function normalizePartnerKey(value: string | null | undefined): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]/g, "");
+}
+
+function getPartnerOrder(name: string | null | undefined): number {
+  const normalized = normalizePartnerKey(name);
+  const index = PARTNER_DISPLAY_ORDER.indexOf(
+    normalized as (typeof PARTNER_DISPLAY_ORDER)[number]
+  );
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -80,8 +90,10 @@ export function getPartnerConfig(input: {
   const normalizedName = normalizePartnerKey(input.name);
   const preset = PARTNER_PRESETS[normalizedName];
   const color = input.colorHex || preset?.color || fallbackColor(normalizedName);
+  const normalizedDisplayName =
+    normalizedName === "todos" ? "Medias" : input.displayName;
   const displayName =
-    input.displayName || preset?.displayName || input.name || "Sin nombre";
+    normalizedDisplayName || preset?.displayName || input.name || "Sin nombre";
 
   return {
     key: normalizedName || normalizePartnerKey(displayName),
@@ -127,4 +139,18 @@ export function getDefaultPartnerColor(displayName: string): string {
   const normalized = normalizePartnerKey(displayName);
   const preset = PARTNER_PRESETS[normalized];
   return preset?.color || fallbackColor(displayName);
+}
+
+export function sortPartnersByBusinessOrder<T extends { name?: string | null; display_name?: string | null }>(
+  partners: T[]
+): T[] {
+  return [...partners].sort((left, right) => {
+    const orderDiff = getPartnerOrder(left.name) - getPartnerOrder(right.name);
+    if (orderDiff !== 0) return orderDiff;
+
+    return String(left.display_name || "").localeCompare(
+      String(right.display_name || ""),
+      "es"
+    );
+  });
 }

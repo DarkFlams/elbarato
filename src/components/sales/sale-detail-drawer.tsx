@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { getPartnerConfigFromPartner } from "@/lib/partners";
+import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 export interface SaleDetailItem {
   id: string;
@@ -51,13 +52,13 @@ export function SaleDetailDrawer({
   onPrint,
 }: SaleDetailDrawerProps) {
   const formatTime = (d: string) =>
-    new Date(d).toLocaleTimeString("es-EC", {
+    formatEcuadorTime(d, {
       hour: "2-digit",
       minute: "2-digit",
     });
 
   const formatDate = (d: string) =>
-    new Date(d).toLocaleDateString("es-EC", {
+    formatEcuadorDate(d, {
       weekday: "long",
       day: "numeric",
       month: "long",
@@ -152,49 +153,51 @@ export function SaleDetailDrawer({
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 px-1">
                 Productos Comprados ({sale.sale_items.length})
               </h3>
-              <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
-                {sale.sale_items.map((item) => {
-                  const partnerConf = getPartnerConfigFromPartner(item.partner);
-                  return (
-                    <div key={item.id} className="p-4 flex gap-4">
-                      {/* Cantidad badge */}
-                      <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                        <span className="text-sm font-semibold text-slate-600 font-mono">
-                          {item.quantity}
-                        </span>
-                      </div>
-                      
-                      {/* Info producto */}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-slate-900 truncate">
-                          {item.product_name}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs font-mono text-slate-500">
-                            ${Number(item.unit_price).toFixed(2)} c/u
-                          </span>
-                          <span className="w-1 h-1 rounded-full bg-slate-300" />
-                          <span className="flex items-center gap-1.5">
-                            <span
-                              className="w-2 h-2 rounded-full shrink-0"
+              <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                <table className="w-full text-left whitespace-nowrap">
+                  <thead className="bg-slate-50 border-b border-slate-100">
+                    <tr>
+                      <th className="w-12 px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">Cant.</th>
+                      <th className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Artículo</th>
+                      <th className="w-20 px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">P. Unit</th>
+                      <th className="w-20 px-2 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100/60 bg-white">
+                    {sale.sale_items.map((item) => {
+                      const partnerConf = getPartnerConfigFromPartner(item.partner);
+                      return (
+                        <tr key={item.id} className="group transition-colors hover:bg-slate-50/80">
+                          <td className="px-2 py-1.5 text-center align-middle">
+                            <span className="font-mono text-[12px] font-bold text-slate-700">{item.quantity}</span>
+                          </td>
+                          <td className="px-2 py-1.5 align-middle relative">
+                            <div 
+                              className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-md"
                               style={{ backgroundColor: partnerConf.color }}
+                              title={partnerConf.displayName}
                             />
-                            <span className="text-xs text-slate-500 truncate">
-                              {partnerConf.displayName}
+                            <div className="pl-1.5 flex flex-col justify-center">
+                              <span className="truncate text-[11px] font-semibold text-slate-800 leading-tight block max-w-[200px]">
+                                {item.product_name}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 text-right align-middle">
+                            <span className="font-mono text-[11px] text-slate-500 tabular-nums">
+                              ${Number(item.unit_price).toFixed(2)}
                             </span>
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Subtotal */}
-                      <div className="shrink-0 text-right">
-                        <span className="text-sm font-bold font-mono text-slate-900">
-                          ${Number(item.subtotal).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                          </td>
+                          <td className="px-2 py-1.5 text-right align-middle">
+                            <span className="font-mono text-[12px] font-bold text-slate-900 tabular-nums">
+                              ${Number(item.subtotal).toFixed(2)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

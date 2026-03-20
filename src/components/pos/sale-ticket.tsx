@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { APP_NAME } from "@/lib/constants";
 import { printTicketDirect } from "@/lib/print-ticket";
+import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
 
 interface SaleTicketProps {
@@ -35,14 +36,14 @@ export function SaleTicket({
   date,
 }: SaleTicketProps) {
   const formatDate = (value: Date) =>
-    value.toLocaleDateString("es-EC", {
+    formatEcuadorDate(value, {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
     });
 
   const formatTime = (value: Date) =>
-    value.toLocaleTimeString("es-EC", {
+    formatEcuadorTime(value, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",

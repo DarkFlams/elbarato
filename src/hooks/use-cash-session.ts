@@ -1,6 +1,6 @@
 /**
  * @file use-cash-session.ts
- * @description Hook local-first para sesion activa de caja.
+ * @description Hook local-first para el dia operativo automatico.
  */
 
 "use client";
@@ -10,6 +10,7 @@ import {
   getOpenCashSessionLocalFirst,
   openCashSessionLocalFirst,
 } from "@/lib/local/cash-expenses";
+import { ecuadorDayKey } from "@/lib/timezone-ecuador";
 import type { CashSession } from "@/types/database";
 
 interface UseCashSessionReturn {
@@ -33,7 +34,7 @@ export function useCashSession(): UseCashSessionReturn {
     try {
       let data = await getOpenCashSessionLocalFirst();
 
-      // Modelo sin apertura/cierre manual: siempre debe existir una sesion activa.
+      // Modelo sin apertura/cierre manual: siempre debe existir un dia operativo activo para hoy.
       if (!data) {
         data = await openCashSessionLocalFirst(0);
       }
@@ -41,7 +42,7 @@ export function useCashSession(): UseCashSessionReturn {
       setSession(data);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Error cargando sesion de caja";
+        err instanceof Error ? err.message : "Error cargando el dia operativo";
       setError(message);
       console.error("[useCashSession] fetchOpenSession error:", err);
     } finally {
@@ -53,16 +54,13 @@ export function useCashSession(): UseCashSessionReturn {
     setError(null);
 
     try {
-      if (session) {
-        setError("Ya existe una sesion de caja abierta");
-        return session;
-      }
+      if (session) return session;
 
       const newSession = await openCashSessionLocalFirst(openingCash);
       setSession(newSession);
       return newSession;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error abriendo sesion de caja";
+      const message = err instanceof Error ? err.message : "Error preparando el dia operativo";
       setError(message);
       console.error("[useCashSession] openSession error:", err);
       return null;
@@ -76,10 +74,10 @@ export function useCashSession(): UseCashSessionReturn {
 
     try {
       // Se mantiene por compatibilidad, pero queda deshabilitado.
-      setError("La funcion de cierre manual de caja esta deshabilitada");
+      setError("El cierre manual ya no existe en este sistema");
       return false;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error cerrando sesion de caja";
+      const message = err instanceof Error ? err.message : "Error cerrando operacion manual";
       setError(message);
       console.error("[useCashSession] closeSession error:", err);
       return false;
@@ -90,6 +88,29 @@ export function useCashSession(): UseCashSessionReturn {
     void fetchOpenSession();
   }, [fetchOpenSession]);
 
+  useEffect(() => {
+    const verifyCurrentDay = () => {
+      if (!session?.opened_at) return;
+
+      const sessionDay = ecuadorDayKey(session.opened_at);
+      const todayDay = ecuadorDayKey();
+
+      if (sessionDay !== todayDay) {
+        void fetchOpenSession();
+      }
+    };
+
+    const interval = window.setInterval(verifyCurrentDay, 60_000);
+    window.addEventListener("focus", verifyCurrentDay);
+    document.addEventListener("visibilitychange", verifyCurrentDay);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", verifyCurrentDay);
+      document.removeEventListener("visibilitychange", verifyCurrentDay);
+    };
+  }, [fetchOpenSession, session?.opened_at]);
+
   return {
     session,
     isLoading,
@@ -99,3 +120,4 @@ export function useCashSession(): UseCashSessionReturn {
     refresh: fetchOpenSession,
   };
 }
+

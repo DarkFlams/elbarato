@@ -24,6 +24,7 @@ import {
   type LocalSyncQueueItem,
 } from "@/lib/local/sync-queue";
 import { useOfflineSync } from "@/hooks/use-offline-sync";
+import { formatEcuadorDateTime } from "@/lib/timezone-ecuador";
 
 async function readSortedOperations() {
   const operations = await listSyncQueueLocalFirst();
@@ -37,8 +38,8 @@ function formatOperationType(operation: LocalSyncQueueItem) {
   if (operation.entityName === "products" && operation.operationType === "dispose") return "Desecho";
   if (operation.entityName === "products") return "Producto";
   if (operation.entityName === "inventory_movements") return "Inventario";
-  if (operation.entityName === "cash_sessions" && operation.operationType === "close") return "Cierre Caja";
-  if (operation.entityName === "cash_sessions") return "Apertura Caja";
+  if (operation.entityName === "cash_sessions" && operation.operationType === "close") return "Cierre legado";
+  if (operation.entityName === "cash_sessions") return "Dia operativo";
   return `${operation.entityName}:${operation.operationType}`;
 }
 
@@ -82,11 +83,11 @@ function formatOperationSummary(operation: LocalSyncQueueItem) {
     }
 
     if (operation.entityName === "cash_sessions" && operation.operationType === "close") {
-      return `Cierre de caja - efectivo final $${Number(payload.closingCash ?? 0).toFixed(2)}`;
+      return `Cierre legado - efectivo final $${Number(payload.closingCash ?? 0).toFixed(2)}`;
     }
 
     if (operation.entityName === "cash_sessions") {
-      return `Apertura de caja - efectivo inicial $${Number(payload.openingCash ?? 0).toFixed(2)}`;
+      return `Inicio automatico del dia - base $${Number(payload.openingCash ?? 0).toFixed(2)}`;
     }
   } catch {
     // fallback below
@@ -97,7 +98,7 @@ function formatOperationSummary(operation: LocalSyncQueueItem) {
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("es-EC", {
+  return formatEcuadorDateTime(value, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -480,3 +481,4 @@ export default function OfflinePage() {
     </div>
   );
 }
+

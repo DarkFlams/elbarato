@@ -1,7 +1,7 @@
-/**
+﻿/**
  * @file expenses-panel.tsx
  * @description Panel de gastos del dia en la sidebar del POS.
- *              Muestra lista de gastos de la sesion activa y
+ *              Muestra lista de gastos del dia operativo y
  *              permite registrar gastos rapidos sin salir del POS.
  */
 
@@ -27,10 +27,11 @@ import type { Partner, ExpenseScope } from "@/types/database";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  getExpenseEligiblePartnersLocalFirst,
+  getExpensePartnersLocalFirst,
   getSessionExpensesLocalFirst,
   upsertExpenseLocalFirst,
 } from "@/lib/local/cash-expenses";
+import { formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 interface ExpenseRow {
   id: string;
@@ -63,6 +64,10 @@ export function ExpensesPanel() {
   const [editingExpense, setEditingExpense] = useState<ExpenseRow | null>(null);
   const submitInFlightRef = useRef(false);
   const createRequestKeyRef = useRef<string | null>(null);
+  const sharedPartners = partners.filter(
+    (partner) => partner.is_expense_eligible && partner.name.toLowerCase() !== "todos"
+  );
+  const individualPartners = partners;
 
   const fetchData = useCallback(async () => {
     if (!session?.id) {
@@ -74,7 +79,7 @@ export function ExpensesPanel() {
     try {
       const [expenseRows, partnerRows] = await Promise.all([
         getSessionExpensesLocalFirst(session.id),
-        getExpenseEligiblePartnersLocalFirst(),
+        getExpensePartnersLocalFirst(),
       ]);
 
       const rows = (expenseRows as ExpenseRow[]) || [];
@@ -107,14 +112,14 @@ export function ExpensesPanel() {
       return;
     }
     if (!session) {
-      toast.error("Caja local aun no inicializada");
+      toast.error("El dia operativo aun no esta listo");
       return;
     }
     if (scope === "individual" && !selectedPartnerId) {
       toast.error("Selecciona a quien pertenece el gasto");
       return;
     }
-    if (scope === "shared" && partners.length === 0) {
+    if (scope === "shared" && sharedPartners.length === 0) {
       toast.error("No hay socias disponibles para dividir el gasto");
       return;
     }
@@ -140,7 +145,7 @@ export function ExpensesPanel() {
         scope,
         partnerId: scope === "individual" ? selectedPartnerId : null,
         sharedPartnerIds:
-          scope === "shared" ? partners.map((partner) => partner.id) : null,
+          scope === "shared" ? sharedPartners.map((partner) => partner.id) : null,
         idempotencyKey: editingExpense ? null : requestKey,
       });
 
@@ -204,18 +209,16 @@ export function ExpensesPanel() {
     createRequestKeyRef.current = null;
   };
 
-  const formatTime = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return d.toLocaleTimeString("es-EC", {
+  const formatTime = (dateStr: string) =>
+    formatEcuadorTime(dateStr, {
       hour: "2-digit",
       minute: "2-digit",
     });
-  };
 
   return (
     <div className="flex flex-col flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-2.5">
         <div className="flex items-center gap-2">
           <Receipt className="h-4.5 w-4.5 text-amber-600" />
           <h3 className="font-semibold text-slate-800 text-sm">Gastos del Dia</h3>
@@ -228,7 +231,7 @@ export function ExpensesPanel() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 text-xs font-semibold text-slate-500 hover:text-amber-700 hover:bg-amber-50"
+          className="h-7 px-2 text-[11px] font-semibold text-slate-500 hover:bg-amber-50 hover:text-amber-700"
           onClick={() => {
             if (showForm) {
               resetForm();
@@ -252,13 +255,13 @@ export function ExpensesPanel() {
 
       {/* Quick form */}
       {showForm && (
-        <div className="px-4 py-3 border-b border-slate-100 bg-amber-50/30 space-y-3">
+        <div className="space-y-2.5 border-b border-slate-100 bg-amber-50/30 px-4 py-2.5">
           <div className="flex gap-2">
             <Input
               placeholder="Descripcion..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="flex-1 h-9 text-sm bg-white"
+              className="h-8 flex-1 bg-white text-sm"
             />
             <div className="relative w-24">
               <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -269,7 +272,7 @@ export function ExpensesPanel() {
                 placeholder="0.00"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                className="h-9 pl-7 text-sm font-mono font-bold bg-white"
+                className="h-8 bg-white pl-7 text-sm font-mono font-bold"
               />
             </div>
           </div>
@@ -308,7 +311,7 @@ export function ExpensesPanel() {
           {/* Partner selector (individual) */}
           {scope === "individual" && (
             <div className="flex gap-1.5">
-              {partners.map((partner) => {
+              {individualPartners.map((partner) => {
                 const config = PARTNERS[partner.name as keyof typeof PARTNERS];
                 const isSelected = selectedPartnerId === partner.id;
                 return (
@@ -316,7 +319,7 @@ export function ExpensesPanel() {
                     key={partner.id}
                     onClick={() => setSelectedPartnerId(partner.id)}
                     className={cn(
-                      "flex-1 flex items-center justify-center gap-1 py-2 rounded-md border text-xs font-semibold transition-all",
+                      "flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md border text-xs font-semibold transition-all",
                       isSelected
                         ? "shadow-sm"
                         : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
@@ -342,7 +345,7 @@ export function ExpensesPanel() {
           <Button
             onClick={handleSubmit}
             disabled={submitting || !session}
-            className="w-full h-9 text-sm bg-slate-800 hover:bg-slate-900 text-white"
+            className="h-8 w-full bg-slate-800 text-sm text-white hover:bg-slate-900"
           >
             {submitting ? (
               <>
@@ -353,7 +356,7 @@ export function ExpensesPanel() {
               "Guardar Cambios"
             ) : scope === "individual" && selectedPartnerId ? (
               `Confirmar Gasto para ${
-                partners.find((p) => p.id === selectedPartnerId)?.display_name
+                individualPartners.find((p) => p.id === selectedPartnerId)?.display_name
               }`
             ) : scope === "shared" ? (
               "Registrar Gasto Compartido"
@@ -367,12 +370,12 @@ export function ExpensesPanel() {
       {/* Listado de Gastos */}
       <ScrollArea className="flex-1 min-h-0">
         {loading ? (
-          <div className="flex items-center justify-center p-8">
+          <div className="flex items-center justify-center p-6">
             <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
           </div>
         ) : expenses.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-8 text-slate-400 gap-2">
-            <Receipt className="h-8 w-8 text-slate-300" />
+          <div className="flex flex-col items-center justify-center gap-2 p-6 text-slate-400">
+            <Receipt className="h-7 w-7 text-slate-300" />
             <p className="text-sm font-medium text-slate-500">Sin gastos registrados</p>
             <p className="text-xs text-slate-400 text-center">
               Usa el boton Nuevo para registrar un gasto rapido.
@@ -384,7 +387,7 @@ export function ExpensesPanel() {
               <div
                 key={exp.id}
                 onClick={() => handleEditClick(exp)}
-                className="group flex items-center justify-between px-4 py-3 hover:bg-amber-50/50 cursor-pointer transition-colors"
+                className="group flex cursor-pointer items-center justify-between px-4 py-2.5 transition-colors hover:bg-amber-50/50"
                 title="Haz clic para modificar o reasignar"
               >
                 <div className="flex-1 min-w-0 pr-2">
@@ -413,3 +416,5 @@ export function ExpensesPanel() {
     </div>
   );
 }
+
+

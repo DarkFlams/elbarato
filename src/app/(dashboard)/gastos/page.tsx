@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { useCashSession } from "@/hooks/use-cash-session";
 import { ExpenseForm } from "@/components/expenses/expense-form";
 import { ExpenseList } from "@/components/expenses/expense-list";
-import { getExpenseEligiblePartnersLocalFirst } from "@/lib/local/cash-expenses";
+import { getExpensePartnersLocalFirst } from "@/lib/local/cash-expenses";
 import { PARTNERS } from "@/lib/constants";
 import type { Partner } from "@/types/database";
 
@@ -30,10 +30,13 @@ export default function GastosPage() {
   const { session, isLoading: sessionLoading } = useCashSession();
   const [partners, setPartners] = useState<Partner[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const sharedPartnerCount = partners.filter(
+    (partner) => partner.is_expense_eligible && partner.name.toLowerCase() !== "todos"
+  ).length;
 
   const fetchPartners = useCallback(async () => {
     try {
-      const data = await getExpenseEligiblePartnersLocalFirst();
+      const data = await getExpensePartnersLocalFirst();
       setPartners(data as Partner[]);
     } catch (err) {
       console.error("[GastosPage] fetchPartners error:", err);
@@ -74,12 +77,12 @@ export default function GastosPage() {
             {session ? (
               <>
                 <Wifi className="h-3 w-3 mr-1" />
-                Caja local activa
+                Dia operativo listo
               </>
             ) : (
               <>
                 <WifiOff className="h-3 w-3 mr-1" />
-                {sessionLoading ? "Inicializando..." : "Reconectando..."}
+                {sessionLoading ? "Inicializando..." : "Reintentando..."}
               </>
             )}
           </Badge>
@@ -117,7 +120,7 @@ export default function GastosPage() {
                 </span>
                 <p>
                   <strong className="text-slate-900">Gasto compartido:</strong> Se
-                  divide entre las 3 socias automáticamente.
+                  divide entre {sharedPartnerCount || 0} socias automáticamente.
                 </p>
               </div>
 
@@ -179,3 +182,4 @@ export default function GastosPage() {
     </div>
   );
 }
+

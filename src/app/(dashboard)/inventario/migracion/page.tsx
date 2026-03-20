@@ -8,7 +8,7 @@
  * 1. Cargar INVEN.xlsx (diccionario de barras)
  * 2. Cargar INV17*.xlsx (inventario con stock)
  * 3. Cruzar Codigo → BARRAS
- * 4. Filtrar solo Rosa, Yadira, Lorena, Todos
+ * 4. Filtrar solo Rosa, Yadira, Lorena, Medias
  * 5. Importar con upsert_product_with_movement usando BARRAS como barcode y Codigo como SKU
  */
 
@@ -405,7 +405,7 @@ export default function InventarioMigracionPage() {
         </h1>
         <p className="text-sm text-slate-500">
           Importa desde Sheyla usando 2 archivos: el reporte de productos (BARRAS) y el inventario (Stock).
-          Solo se importan Rosa, Yadira, Lorena y Todos.
+          Solo se importan Rosa, Yadira, Lorena y Medias.
         </p>
       </div>
 

@@ -3,6 +3,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createClient } from "@/lib/supabase/client";
 import { isMissingTauriCommandError, isTauriRuntime } from "@/lib/tauri-runtime";
+import {
+  ecuadorDateEndUtcIso,
+  ecuadorDateStartUtcIso,
+} from "@/lib/timezone-ecuador";
 import type { CashSession, CashSessionReport, Expense, ExpenseAllocation, Partner } from "@/types/database";
 import type { SaleDetailData } from "@/components/sales/sale-detail-drawer";
 
@@ -121,8 +125,14 @@ async function getSalesHistoryRemote(fromDate?: string, toDate?: string) {
     )
     .order("created_at", { ascending: false });
 
-  if (fromDate) query = query.gte("created_at", `${fromDate}T00:00:00`);
-  if (toDate) query = query.lte("created_at", `${toDate}T23:59:59.999`);
+  if (fromDate) {
+    const fromUtc = ecuadorDateStartUtcIso(fromDate);
+    if (fromUtc) query = query.gte("created_at", fromUtc);
+  }
+  if (toDate) {
+    const toUtc = ecuadorDateEndUtcIso(toDate);
+    if (toUtc) query = query.lte("created_at", toUtc);
+  }
   if (!fromDate && !toDate) query = query.limit(50);
 
   const { data, error } = await query;
@@ -157,8 +167,14 @@ async function getCashSessionsHistoryRemote(fromDate?: string, toDate?: string) 
   const supabase = createClient();
   let query = supabase.from("cash_sessions").select("*").order("opened_at", { ascending: false });
 
-  if (fromDate) query = query.gte("opened_at", `${fromDate}T00:00:00`);
-  if (toDate) query = query.lte("opened_at", `${toDate}T23:59:59.999`);
+  if (fromDate) {
+    const fromUtc = ecuadorDateStartUtcIso(fromDate);
+    if (fromUtc) query = query.gte("opened_at", fromUtc);
+  }
+  if (toDate) {
+    const toUtc = ecuadorDateEndUtcIso(toDate);
+    if (toUtc) query = query.lte("opened_at", toUtc);
+  }
   if (!fromDate && !toDate) query = query.limit(30);
 
   const { data, error } = await query;

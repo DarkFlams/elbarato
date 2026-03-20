@@ -27,6 +27,11 @@ import {
   getCashSessionsHistoryLocalFirst,
   getExpensesBySessionLocalFirst,
 } from "@/lib/local/history";
+import {
+  formatEcuadorDate,
+  formatEcuadorTime,
+  toEcuadorDateInput,
+} from "@/lib/timezone-ecuador";
 import { PARTNERS } from "@/lib/constants";
 import { exportToExcel, exportToPdf } from "@/lib/export-utils";
 import type { ReportData } from "@/lib/export-utils";
@@ -53,10 +58,6 @@ type SessionExpenseRow = {
   }>;
   created_at: string;
 };
-
-function formatDateInput(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
 
 export default function ReportesPage() {
   const [sessions, setSessions] = useState<SessionWithReport[]>([]);
@@ -89,8 +90,8 @@ export default function ReportesPage() {
     const start = new Date();
     start.setDate(end.getDate() - (days - 1));
 
-    setFromDate(formatDateInput(start));
-    setToDate(formatDateInput(end));
+    setFromDate(toEcuadorDateInput(start));
+    setToDate(toEcuadorDateInput(end));
   };
 
   const clearFilters = () => {
@@ -122,7 +123,7 @@ export default function ReportesPage() {
         allocations: (e.expense_allocations || [])
           .map((a) => `${a.partner.display_name}: $${Number(a.amount).toFixed(2)}`)
           .join(", "),
-        time: new Date(e.created_at).toLocaleTimeString("es-EC", {
+        time: formatEcuadorTime(e.created_at, {
           hour: "2-digit",
           minute: "2-digit",
         }),
@@ -154,13 +155,13 @@ export default function ReportesPage() {
 
     return {
       sessionId: session.id,
-      date: new Date(session.opened_at).toLocaleDateString("es-EC"),
-      openedAt: new Date(session.opened_at).toLocaleTimeString("es-EC", {
+      date: formatEcuadorDate(session.opened_at),
+      openedAt: formatEcuadorTime(session.opened_at, {
         hour: "2-digit",
         minute: "2-digit",
       }),
       closedAt: session.closed_at
-        ? new Date(session.closed_at).toLocaleTimeString("es-EC", {
+        ? formatEcuadorTime(session.closed_at, {
             hour: "2-digit",
             minute: "2-digit",
           })
@@ -183,14 +184,14 @@ export default function ReportesPage() {
   };
 
   const formatDate = (d: string) =>
-    new Date(d).toLocaleDateString("es-EC", {
+    formatEcuadorDate(d, {
       weekday: "short",
       day: "numeric",
       month: "short",
     });
 
   const formatTime = (d: string) =>
-    new Date(d).toLocaleTimeString("es-EC", {
+    formatEcuadorTime(d, {
       hour: "2-digit",
       minute: "2-digit",
     });

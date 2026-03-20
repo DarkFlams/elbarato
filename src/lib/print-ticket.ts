@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { APP_NAME } from "@/lib/constants";
 import { getSavedTicketPrinterName } from "@/lib/local/printers";
 import { isTauriRuntime } from "@/lib/tauri-runtime";
+import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
 
 interface PrintTicketData {
@@ -27,14 +28,14 @@ const DIVIDER = "-".repeat(LINE_WIDTH);
 const TOTAL_DIVIDER = "=".repeat(LINE_WIDTH);
 
 const formatDate = (d: Date) =>
-  d.toLocaleDateString("es-EC", {
+  formatEcuadorDate(d, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
 
 const formatTime = (d: Date) =>
-  d.toLocaleTimeString("es-EC", {
+  formatEcuadorTime(d, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

@@ -23,10 +23,10 @@ export const PARTNERS = {
   },
   todos: {
     id: "todos",
-    displayName: "Todos",
+    displayName: "Medias",
     color: "#8B7A62",
     colorLight: "rgba(139, 122, 98, 0.12)",
-    emoji: "T",
+    emoji: "M",
   },
 } as const;
 

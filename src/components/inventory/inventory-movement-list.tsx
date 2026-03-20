@@ -20,6 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { listInventoryMovementsLocalFirst } from "@/lib/local/inventory-movements";
+import {
+  ecuadorDayKey,
+  formatEcuadorDate,
+  formatEcuadorDateTime,
+  toEcuadorDateInput,
+} from "@/lib/timezone-ecuador";
 import { cn } from "@/lib/utils";
 import type {
   InventoryMovementWithProduct,
@@ -64,7 +70,7 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("es-EC", {
+  return formatEcuadorDateTime(value, {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -128,22 +134,24 @@ export function InventoryMovementList({
     const groups: { dateKey: string; items: typeof filteredMovements }[] = [];
     
     for (const movement of filteredMovements) {
-      const dateObj = new Date(movement.created_at);
-      
+      const dateObj = movement.created_at;
+
       let dateKey = "";
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      
-      const isToday = dateObj.toDateString() === today.toDateString();
-      const isYesterday = dateObj.toDateString() === yesterday.toDateString();
-      
+      const todayKey = ecuadorDayKey();
+      const yesterdayDate = new Date();
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterdayKey = ecuadorDayKey(yesterdayDate);
+      const movementDayKey = ecuadorDayKey(dateObj);
+
+      const isToday = movementDayKey === todayKey;
+      const isYesterday = movementDayKey === yesterdayKey;
+
       if (isToday) {
         dateKey = "Hoy";
       } else if (isYesterday) {
         dateKey = "Ayer";
       } else {
-        dateKey = dateObj.toLocaleDateString("es-EC", {
+        dateKey = formatEcuadorDate(dateObj, {
           weekday: "long",
           year: "numeric",
           month: "long",
@@ -193,7 +201,7 @@ export function InventoryMovementList({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `movimientos_inventario_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `movimientos_inventario_${toEcuadorDateInput(new Date())}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };

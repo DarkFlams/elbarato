@@ -16,6 +16,12 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+import {
+  formatEcuadorDate,
+  formatEcuadorDateTime,
+  formatEcuadorTime,
+  toEcuadorDateInput,
+} from "@/lib/timezone-ecuador";
 
 // ============================================
 // TIPOS
@@ -226,7 +232,7 @@ export function exportToPdf(data: ReportData, filename?: string) {
     doc.setFontSize(8);
     doc.setTextColor(150);
     doc.text(
-      `Generado el ${new Date().toLocaleDateString("es-EC")} a las ${new Date().toLocaleTimeString("es-EC")}`,
+      `Generado el ${formatEcuadorDate(new Date())} a las ${formatEcuadorTime(new Date())}`,
       14,
       doc.internal.pageSize.getHeight() - 10
     );
@@ -304,7 +310,7 @@ export async function exportSalesToExcel(
   // METADATOS Y LIQUIDACIÓN
   sheet.getCell("A3").value = "Generado el:";
   sheet.getCell("A3").font = { bold: true, color: { argb: "FF475569" } };
-  sheet.getCell("B3").value = new Date().toLocaleString("es-EC");
+  sheet.getCell("B3").value = formatEcuadorDateTime(new Date());
 
   sheet.getCell("A4").value = "Filtro Aplicado:";
   sheet.getCell("A4").font = { bold: true, color: { argb: "FF475569" } };
@@ -512,7 +518,7 @@ export async function exportSalesToExcel(
   // ===================================
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const fname = filename || `Ventas_Reporte_${new Date().toISOString().split("T")[0]}.xlsx`;
+  const fname = filename || `Ventas_Reporte_${toEcuadorDateInput(new Date())}.xlsx`;
   saveAs(blob, fname);
 }
 
@@ -528,7 +534,7 @@ export function exportSalesToPdf(sales: SaleExportData[], liquidation: Liquidati
   doc.setFontSize(10);
   doc.setTextColor(100);
   doc.text(`Filtro: ${liquidation.partnerName}`, 14, 28);
-  doc.text(`Generado: ${new Date().toLocaleString("es-EC")}`, 14, 34);
+  doc.text(`Generado: ${formatEcuadorDateTime(new Date())}`, 14, 34);
   doc.text(`Total tickets: ${sales.length}`, 14, 40);
 
   doc.setFont("helvetica", "bold");
@@ -595,7 +601,10 @@ export function exportSalesToPdf(sales: SaleExportData[], liquidation: Liquidati
     doc.text("Detalle de Gastos Deducidos", 14, finalY);
 
     const expBody = liquidation.expensesDetail.map(exp => [
-      new Date(exp.date).toLocaleDateString("es-EC") + " " + new Date(exp.date).toLocaleTimeString("es-EC", { hour: '2-digit', minute: '2-digit' }),
+      `${formatEcuadorDate(exp.date)} ${formatEcuadorTime(exp.date, {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`,
       exp.description,
       `-$${exp.amount.toFixed(2)}`
     ]);
@@ -633,6 +642,6 @@ export function exportSalesToPdf(sales: SaleExportData[], liquidation: Liquidati
     });
   }
 
-  const fname = filename || `Ventas_${new Date().toISOString().split("T")[0]}.pdf`;
+  const fname = filename || `Ventas_${toEcuadorDateInput(new Date())}.pdf`;
   doc.save(fname);
 }

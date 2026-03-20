@@ -113,6 +113,15 @@ class RetryableSyncError extends Error {}
 
 let currentDesktopSyncPromise: Promise<DesktopSyncResult> | null = null;
 
+function getSyncPriority(item: LocalSyncQueueItem) {
+  if (item.entityName === "cash_sessions") return 0;
+  if (item.entityName === "products") return 1;
+  if (item.entityName === "inventory_movements") return 2;
+  if (item.entityName === "expenses") return 3;
+  if (item.entityName === "sales") return 4;
+  return 5;
+}
+
 function getRpcRow<T = Record<string, unknown>>(data: unknown): T | null {
   if (Array.isArray(data)) {
     return (data[0] as T | undefined) ?? null;
@@ -252,7 +261,7 @@ async function syncCashSessionItem(
     const remoteSessionId = resolveRequiredRemoteId(
       state.cashSessionRemoteIds,
       item.entityRemoteId ?? item.entityLocalId,
-      "La sesion"
+      "El dia operativo"
     );
 
     const { error } = await supabase
@@ -281,7 +290,7 @@ async function syncSaleItem(item: LocalSyncQueueItem, state: SyncReferenceState)
   const remoteCashSessionId = resolveRequiredRemoteId(
     state.cashSessionRemoteIds,
     payload.cashSessionId,
-    "La sesion de caja"
+    "El dia operativo"
   );
 
   const rpcItems = payload.items.map((row) => ({
@@ -317,7 +326,7 @@ async function syncExpenseItem(item: LocalSyncQueueItem, state: SyncReferenceSta
   const remoteCashSessionId = resolveRequiredRemoteId(
     state.cashSessionRemoteIds,
     payload.cashSessionId,
-    "La sesion de caja"
+    "El dia operativo"
   );
 
   const remotePartnerId = payload.partnerId
@@ -518,10 +527,16 @@ async function doSyncDesktopQueue(): Promise<DesktopSyncResult> {
     return result;
   }
 
+  await invoke<number>("ensure_local_cash_sessions_sync_queued");
+
   const state = await loadReferenceState();
   const pendingItems = (await listSyncQueueLocalFirst())
     .filter((item) => item.status === "pending" && isItemDue(item))
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    .sort((left, right) => {
+      const priorityDiff = getSyncPriority(left) - getSyncPriority(right);
+      if (priorityDiff !== 0) return priorityDiff;
+      return left.createdAt.localeCompare(right.createdAt);
+    });
 
   for (const item of pendingItems) {
     result.processed += 1;
@@ -560,3 +575,4 @@ export async function syncDesktopQueue() {
 
   return currentDesktopSyncPromise;
 }
+

@@ -72,6 +72,13 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE partners ADD COLUMN IF NOT EXISTS is_expense_eligible BOOLEAN NOT NULL DEFAULT TRUE;
+
+UPDATE partners
+SET
+  display_name = 'Medias',
+  is_expense_eligible = FALSE
+WHERE name = 'todos';
 
 UPDATE products SET purchase_price = 0 WHERE purchase_price < 0;
 UPDATE products SET sale_price = 0.01 WHERE sale_price <= 0;

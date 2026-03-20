@@ -26,15 +26,16 @@ CREATE TABLE partners (
   name partner_enum UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
   color_hex TEXT NOT NULL,
+  is_expense_eligible BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- Seed
-INSERT INTO partners (name, display_name, color_hex) VALUES
-  ('rosa', 'Rosa', '#F43F5E'),
-  ('lorena', 'Lorena', '#22C55E'),
-  ('yadira', 'Yadira', '#3B82F6'),
-  ('todos', 'Todos', '#8B7A62');
+INSERT INTO partners (name, display_name, color_hex, is_expense_eligible) VALUES
+  ('rosa', 'Rosa', '#F43F5E', true),
+  ('lorena', 'Lorena', '#22C55E', true),
+  ('yadira', 'Yadira', '#3B82F6', true),
+  ('todos', 'Medias', '#8B7A62', false);
 
 -- ============================================
 -- PRODUCTOS

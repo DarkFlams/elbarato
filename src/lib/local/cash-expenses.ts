@@ -3,6 +3,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createClient } from "@/lib/supabase/client";
 import { isMissingTauriCommandError, isTauriRuntime } from "@/lib/tauri-runtime";
+import {
+  ecuadorDateEndUtcIso,
+  ecuadorDateStartUtcIso,
+  toEcuadorDateInput,
+} from "@/lib/timezone-ecuador";
 import type { CashSession, Expense, ExpenseAllocation, Partner } from "@/types/database";
 import { getCatalogPartners } from "./catalog";
 import { upsertExpenseWithOfflineFallback } from "@/lib/offline/rpc";
@@ -35,6 +40,13 @@ interface UpsertExpenseInput {
   idempotencyKey?: string | null;
 }
 
+function normalizePartnerDisplayName(name: string | null | undefined, displayName: string): string {
+  if ((name || "").toLowerCase() === "todos") {
+    return "Medias";
+  }
+  return displayName;
+}
+
 function mapLocalCashSession(record: LocalCashSessionRecord): CashSession {
   return {
     ...record,
@@ -53,18 +65,35 @@ function mapLocalExpense(record: LocalExpenseRecord): LocalExpenseRecord {
       partner: {
         ...allocation.partner,
         id: allocation.partner.remote_id || allocation.partner.id,
+        display_name: normalizePartnerDisplayName(
+          allocation.partner.name,
+          allocation.partner.display_name
+        ),
       },
     })),
   };
 }
 
+function getLocalDayBounds() {
+  const day = toEcuadorDateInput(new Date());
+  const start = ecuadorDateStartUtcIso(day);
+  const end = ecuadorDateEndUtcIso(day);
+  return {
+    startIso: start,
+    endIso: end,
+  };
+}
+
 export async function getOpenCashSessionLocalFirst() {
   if (!isTauriRuntime()) {
+    const { startIso, endIso } = getLocalDayBounds();
     const supabase = createClient();
     const { data, error } = await supabase
       .from("cash_sessions")
       .select("*")
       .eq("status", "open")
+      .gte("opened_at", startIso)
+      .lte("opened_at", endIso)
       .order("opened_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -82,11 +111,14 @@ export async function getOpenCashSessionLocalFirst() {
     }
 
     console.warn("[cash-expenses] get_open_local_cash_session unavailable, using Supabase fallback");
+    const { startIso, endIso } = getLocalDayBounds();
     const supabase = createClient();
     const { data, error: remoteError } = await supabase
       .from("cash_sessions")
       .select("*")
       .eq("status", "open")
+      .gte("opened_at", startIso)
+      .lte("opened_at", endIso)
       .order("opened_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -99,9 +131,23 @@ export async function getOpenCashSessionLocalFirst() {
 export async function openCashSessionLocalFirst(openingCash = 0) {
   if (!isTauriRuntime()) {
     const supabase = createClient();
+    const { startIso, endIso } = getLocalDayBounds();
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
+    const { data: existingSession, error: existingError } = await supabase
+      .from("cash_sessions")
+      .select("*")
+      .eq("status", "open")
+      .gte("opened_at", startIso)
+      .lte("opened_at", endIso)
+      .order("opened_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+    if (existingSession) return existingSession as CashSession;
 
     const { data, error } = await supabase
       .from("cash_sessions")
@@ -129,9 +175,23 @@ export async function openCashSessionLocalFirst(openingCash = 0) {
 
     console.warn("[cash-expenses] open_local_cash_session unavailable, using Supabase fallback");
     const supabase = createClient();
+    const { startIso, endIso } = getLocalDayBounds();
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
+    const { data: existingSession, error: existingError } = await supabase
+      .from("cash_sessions")
+      .select("*")
+      .eq("status", "open")
+      .gte("opened_at", startIso)
+      .lte("opened_at", endIso)
+      .order("opened_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+    if (existingSession) return existingSession as CashSession;
 
     const { data, error: remoteError } = await supabase
       .from("cash_sessions")
@@ -309,5 +369,11 @@ export async function upsertExpenseLocalFirst(input: UpsertExpenseInput) {
 
 export async function getExpenseEligiblePartnersLocalFirst() {
   const partners = await getCatalogPartners();
-  return partners.filter((partner) => partner.is_expense_eligible);
+  return partners.filter(
+    (partner) => partner.is_expense_eligible && partner.name.toLowerCase() !== "todos"
+  );
+}
+
+export async function getExpensePartnersLocalFirst() {
+  return await getCatalogPartners();
 }

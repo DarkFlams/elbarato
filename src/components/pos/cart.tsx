@@ -57,7 +57,7 @@ export function Cart() {
     if (items.length === 0) return;
 
     if (!session) {
-      toast.error("Caja local aún no inicializada");
+      toast.error("El dia operativo aun no esta listo");
       return;
     }
 
@@ -197,18 +197,18 @@ export function Cart() {
   };
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden min-h-0">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50/50">
+      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-2.5">
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center bg-indigo-100 text-indigo-700 w-9 h-9 rounded-full">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700">
             <ShoppingCart className="h-4.5 w-4.5" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-slate-800">
+            <h2 className="text-[15px] font-bold text-slate-800">
               Carrito de Ventas
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-[11px] text-slate-500">
               {itemCount} producto{itemCount !== 1 ? "s" : ""} en curso
             </p>
           </div>
@@ -219,7 +219,7 @@ export function Cart() {
               variant="outline"
               size="sm"
               onClick={() => setTicketOpen(true)}
-              className="h-8 text-xs font-semibold text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 border-slate-200"
+              className="h-7 border-slate-200 text-[11px] font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700"
             >
               <Printer className="h-3.5 w-3.5 mr-1.5" /> Ticket
             </Button>
@@ -228,7 +228,7 @@ export function Cart() {
             <Button
               variant="ghost"
               size="sm"
-              className="text-slate-400 hover:text-red-600 hover:bg-red-50 font-medium h-8 px-2.5"
+              className="h-7 px-2 text-[11px] font-medium text-slate-400 hover:bg-red-50 hover:text-red-600"
               onClick={clearCart}
             >
               <Trash2 className="h-4 w-4 mr-1" /> Vaciar
@@ -240,32 +240,45 @@ export function Cart() {
       {/* Items */}
       <ScrollArea className="flex-1 min-h-0 bg-white">
         {items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-6 lg:p-12 h-full min-h-[150px] text-slate-400 gap-3">
-            <div className="w-20 h-20 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100 border-dashed">
+          <div className="flex h-full min-h-[140px] flex-col items-center justify-center gap-2 p-6 text-slate-400 lg:p-10">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full border border-slate-100 border-dashed bg-slate-50">
               <ShoppingCart className="h-8 w-8 text-slate-300" />
             </div>
-            <p className="text-slate-500 font-bold text-lg">
+            <p className="text-base font-bold text-slate-500">
               El carrito está vacío
             </p>
-            <p className="text-sm text-slate-400 text-center max-w-[280px] leading-relaxed">
+            <p className="max-w-[260px] text-center text-xs leading-relaxed text-slate-400">
               Escanea un código de barras o busca un producto arriba.
             </p>
           </div>
         ) : (
-          <div className="p-4 space-y-2">
-            {items.map((item, index) => (
-              <CartItemRow
-                key={item.product_id}
-                item={item}
-                index={index}
-              />
-            ))}
-          </div>
+          <table className="w-full text-left border-collapse table-fixed">
+            <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+              <tr>
+                <th className="w-8 px-2 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">#</th>
+                <th className="w-24 px-2 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Código</th>
+                <th className="px-2 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Artículo</th>
+                <th className="w-[72px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Cant.</th>
+                <th className="w-20 px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">P. Unit</th>
+                <th className="w-[75px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</th>
+                <th className="w-8 px-1 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody className="bg-white">
+              {items.map((item, index) => (
+                <CartItemRow
+                  key={item.product_id}
+                  item={item}
+                  index={index}
+                />
+              ))}
+            </tbody>
+          </table>
         )}
       </ScrollArea>
 
       {/* Footer: Total + Pago + Registrar */}
-      <div className="border-t border-slate-200 bg-slate-50/30 px-5 py-2.5 space-y-2.5 shrink-0">
+      <div className="shrink-0 space-y-2 border-t border-slate-200 bg-slate-50/30 px-4 py-2">
         <SaleSummary />
 
         <PaymentSelector />
@@ -281,7 +294,7 @@ export function Cart() {
               Number(amountReceived) > 0 &&
               Number(amountReceived) < total)
           }
-          className={`w-full h-11 text-base font-bold shadow-md transition-all duration-200 border-0 ${
+          className={`h-10 w-full border-0 text-sm font-bold shadow-md transition-all duration-200 ${
             items.length === 0
               ? "bg-slate-100 text-slate-400 shadow-none cursor-not-allowed"
               : !paymentMethod
@@ -291,7 +304,7 @@ export function Cart() {
               : "bg-sky-600 hover:bg-sky-700 shadow-sky-600/20 text-white"
           }`}
         >
-          <DollarSign className="h-5 w-5 mr-2" />
+          <DollarSign className="mr-2 h-4.5 w-4.5" />
           {isProcessing
             ? "Registrando..."
             : items.length === 0
@@ -316,4 +329,6 @@ export function Cart() {
     </div>
   );
 }
+
+
 

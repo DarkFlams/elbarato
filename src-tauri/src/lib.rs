@@ -3,6 +3,7 @@ mod database;
 use database::{
   adjust_local_product_stock, close_local_cash_session, count_local_products,
   create_local_remate, dispose_local_product, find_local_product_by_barcode,
+  ensure_local_cash_sessions_sync_queued,
   generate_next_local_barcode, get_local_app_setting, get_local_cash_session_report, get_local_database_info,
   get_local_session_sales_stats, get_local_sync_queue_stats, get_open_local_cash_session, initialize_database,
   list_local_bodega_products, list_local_cash_sessions, list_local_expenses, list_local_printers,
@@ -41,6 +42,7 @@ pub fn run() {
       set_local_app_setting,
       get_open_local_cash_session,
       open_local_cash_session,
+      ensure_local_cash_sessions_sync_queued,
       close_local_cash_session,
       register_local_sale,
       get_local_session_sales_stats,

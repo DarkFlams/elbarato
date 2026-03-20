@@ -89,12 +89,12 @@ function AppSidebar() {
   };
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border relative">
+    <Sidebar collapsible="icon" className="relative border-r border-sidebar-border">
       <Button
         onClick={toggleSidebar}
         variant="outline"
         size="icon"
-        className="absolute -right-3 top-1/2 -translate-y-1/2 z-50 h-6 w-6 flex items-center justify-center rounded-full border border-slate-200 bg-white shadow-md text-slate-400 hover:text-indigo-600 focus:outline-none transition-transform hover:scale-110"
+        className="absolute -right-3 top-1/2 z-50 flex h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-md transition-transform hover:scale-110 hover:text-indigo-600 focus:outline-none"
       >
         {state === "expanded" ? (
           <ChevronLeft className="h-3.5 w-3.5" />
@@ -104,14 +104,14 @@ function AppSidebar() {
         <span className="sr-only">Toggle Sidebar</span>
       </Button>
 
-      <SidebarHeader className="p-3">
+      <SidebarHeader className="p-2.5">
         <div className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0">
-            <ShoppingBag className="w-5 h-5 text-white" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-md shadow-indigo-600/20">
+            <ShoppingBag className="h-4.5 w-4.5 text-white" />
           </div>
           <div className="flex flex-col flex-1 group-data-[collapsible=icon]:hidden overflow-hidden">
-            <span className="text-sm font-semibold gradient-text truncate">{APP_NAME}</span>
-            <span className="text-[11px] text-muted-foreground truncate">Control de Ventas</span>
+            <span className="gradient-text truncate text-[13px] font-semibold">{APP_NAME}</span>
+            <span className="truncate text-[10px] text-muted-foreground">Control de Ventas</span>
           </div>
         </div>
       </SidebarHeader>
@@ -135,7 +135,7 @@ function AppSidebar() {
                         tooltip={item.title}
                         className="transition-all duration-200"
                       >
-                        <item.icon className="w-4 h-4" />
+                        <item.icon className="h-3.5 w-3.5" />
                         <span>{item.title}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -147,7 +147,7 @@ function AppSidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="p-2">
+      <SidebarFooter className="p-1.5">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -155,7 +155,7 @@ function AppSidebar() {
               tooltip="Cerrar sesion"
               className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="h-3.5 w-3.5" />
               <span>Cerrar Sesion</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -247,7 +247,7 @@ export default function DashboardLayout({
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <main className="flex flex-col h-screen p-3 lg:p-4 2xl:p-6 overflow-hidden">
+        <main className="flex h-screen flex-col overflow-hidden p-2.5 lg:p-3 2xl:p-4">
           <DashboardAuthGate>
             <OfflineSyncIndicator />
             <LocalCatalogGate>{children}</LocalCatalogGate>

@@ -173,6 +173,7 @@ export interface CashSessionReport {
 export interface CartItem {
   product_id: string;
   barcode: string;
+  sku?: string | null;
   name: string;
   owner_id: string;
   owner_name: PartnerEnum;

@@ -1,9 +1,3 @@
-/**
- * @file cart-item.tsx
- * @description Linea individual del carrito de venta.
- *              Diseño limpio: dot color + nombre bold + subtotal editable.
- */
-
 "use client";
 
 import { useState, useRef, useEffect } from "react";
@@ -56,89 +50,98 @@ export function CartItemRow({ item, index }: CartItemProps) {
   };
 
   return (
-    <div
-      className="group relative flex items-center gap-4 px-4 py-3 rounded-lg border border-slate-200 bg-white transition-all duration-150 hover:bg-slate-50/80 animate-[slide-in-right_0.3s_ease-out_forwards]"
+    <tr
+      className="group transition-colors bg-white hover:bg-slate-50/80 animate-[slide-in-right_0.2s_ease-out_forwards] select-none"
       style={{
-        borderLeftWidth: "4px",
-        borderLeftColor: item.owner_color,
-        animationDelay: `${index * 50}ms`,
+        animationDelay: `${index * 30}ms`,
         opacity: 0,
       }}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest('button, input')) return;
+        removeItem(item.product_id);
+      }}
     >
-      {/* Eliminar (flotante) */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute -top-1.5 -right-1.5 h-6 w-6 rounded-full bg-white border border-slate-200 opacity-0 group-hover:opacity-100 text-slate-400 hover:bg-red-500 hover:text-white hover:border-red-500 transition-all shadow-sm z-10"
-        onClick={() => removeItem(item.product_id)}
-      >
-        <X className="h-3 w-3" />
-      </Button>
-
-      {/* Nombre del producto */}
-      <div className="flex-1 min-w-0">
-        <p className="text-base font-bold truncate text-slate-800 leading-tight">
-          {item.name}
+      <td className="px-2 py-1.5 text-center text-[11px] font-medium text-slate-400 border-b border-slate-100/60">
+        {index + 1}
+      </td>
+      <td className="px-2 py-1.5 border-b border-slate-100/60">
+        <span className="font-mono text-[11px] text-slate-500 uppercase">{item.sku || item.barcode}</span>
+      </td>
+      <td className="px-2 py-1.5 relative border-b border-slate-100/60">
+        <div 
+          className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-md"
+          style={{ backgroundColor: item.owner_color }}
+          title={item.owner_display_name}
+        />
+        <div className="flex flex-col justify-center pl-1.5 w-[140px] 2xl:w-[200px]">
+          <span className="truncate text-[12px] font-semibold text-slate-800 leading-tight block">
+            {item.name}
+          </span>
           {isOutOfStock && (
-            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 uppercase tracking-wider align-middle" title="Se venderá en negativo">
+            <span className="inline-block mt-0.5 text-[9px] font-bold text-amber-600 bg-amber-50 px-1 rounded-sm w-fit uppercase tracking-tight">
               Sin stock
             </span>
           )}
-        </p>
-        <p className="text-xs text-slate-400 mt-0.5 font-mono">
-          ${item.price_override.toFixed(2)} c/u
-        </p>
-      </div>
-
-      {/* Controles de cantidad */}
-      <div className="flex items-center gap-0.5 bg-slate-100 rounded-lg p-0.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 rounded-md hover:bg-white text-slate-600 shadow-none"
-          onClick={() => updateQuantity(item.product_id, item.quantity - 1)}
-        >
-          <Minus className="h-3.5 w-3.5" />
-        </Button>
-
-        <span className="w-7 text-center text-sm font-bold tabular-nums text-slate-800">
-          {item.quantity}
-        </span>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 rounded-md hover:bg-white text-slate-600 shadow-none disabled:opacity-40"
-          onClick={handleIncrease}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
-      {/* Subtotal editable */}
-      {editingPrice ? (
-        <input
-          ref={inputRef}
-          type="number"
-          step="0.01"
-          min="0"
-          className="w-24 text-right text-lg font-black font-mono tabular-nums text-slate-900 bg-indigo-50 border border-indigo-300 rounded-md px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500/40"
-          value={editValue}
-          onChange={(e) => setEditValue(e.target.value)}
-          onBlur={commitEdit}
-          onKeyDown={handleEditKeyDown}
-        />
-      ) : (
-        <button
-          onClick={startEditing}
-          className="min-w-[80px] text-right cursor-pointer group/price hover:bg-slate-100 rounded-md px-2 py-1 transition-colors"
-          title="Click para editar precio"
-        >
-          <span className="font-mono text-lg font-black tabular-nums text-slate-900 group-hover/price:text-indigo-600 transition-colors">
-            ${item.subtotal.toFixed(2)}
+        </div>
+      </td>
+      <td className="px-2 py-1.5 text-right border-b border-slate-100/60">
+        <div className="inline-flex items-center justify-end gap-1 bg-slate-100/80 p-0.5 rounded">
+          <button
+            className="flex h-4 w-4 items-center justify-center rounded-sm text-slate-500 hover:bg-white hover:text-slate-900 transition-colors shadow-sm"
+            onClick={() => updateQuantity(item.product_id, item.quantity - 1)}
+          >
+            <Minus className="h-2.5 w-2.5" />
+          </button>
+          <span className="w-5 text-center text-xs font-bold tabular-nums text-slate-800">
+            {item.quantity}
           </span>
+          <button
+            className="flex h-4 w-4 items-center justify-center rounded-sm text-slate-500 hover:bg-white hover:text-slate-900 transition-colors shadow-sm"
+            onClick={handleIncrease}
+          >
+            <Plus className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      </td>
+      <td className="px-2 py-1.5 text-right border-b border-slate-100/60">
+        <div className="font-mono text-[12px] tabular-nums text-slate-500">
+          ${item.price_override.toFixed(2)}
+        </div>
+      </td>
+      <td className="px-2 py-1.5 text-right border-b border-slate-100/60">
+        {editingPrice ? (
+          <input
+            ref={inputRef}
+            type="number"
+            step="0.01"
+            className="w-16 rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-right font-mono text-[12px] font-bold tabular-nums text-indigo-900 outline-none focus:ring-1 focus:ring-indigo-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={handleEditKeyDown}
+          />
+        ) : (
+          <button
+            onClick={startEditing}
+            className="group/price inline-block cursor-pointer rounded px-1 min-w-[50px] py-0.5 text-right transition-colors hover:bg-indigo-50"
+            title="Click para editar precio/subtotal"
+          >
+            <span className="font-mono text-[13px] font-black tabular-nums text-slate-900 transition-colors group-hover/price:text-indigo-700">
+              ${item.subtotal.toFixed(2)}
+            </span>
+          </button>
+        )}
+      </td>
+      <td className="px-1 py-1.5 text-center border-b border-slate-100/60">
+        <button
+          className="flex h-6 w-6 items-center justify-center rounded text-slate-300 hover:bg-red-50 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 mx-auto"
+          onClick={() => removeItem(item.product_id)}
+          title="Eliminar producto"
+        >
+          <X className="h-3.5 w-3.5" />
         </button>
-      )}
-    </div>
+      </td>
+    </tr>
   );
 }
+

@@ -8,7 +8,8 @@ Nota importante:
 - La prioridad actual del proyecto ya no es expandir modulos.
 - La prioridad actual es pasar a desktop lo que ya existe hoy, sin recortar funciones ni rehacer la logica.
 - La prioridad tecnica actual es modelo `local-first` total: la PC opera primero y Supabase sincroniza despues.
-- El plan activo de ejecucion pasa a ser `docs/MIGRACION_DESKTOP.md`.
+- El plan activo de ejecucion para stock movil y control de concurrencia es `docs/PLAN_STOCK_MOVIL_QR.md`.
+- El plan `docs/PLAN_OFFLINE.md` queda obsoleto por decision de producto: operacion online requerida.
 
 Ultima actualizacion: 2026-03-19
 

@@ -91,18 +91,18 @@ export default function CajaPage() {
   useBarcodeScanner({ onScan: handleScan, enabled: true });
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col gap-4">
-      <div className="flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden lg:flex-row">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:min-w-[400px]">
-          <div className="flex shrink-0 items-center gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+    <div className="relative flex h-full min-h-0 flex-col gap-2.5">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-2.5 overflow-hidden lg:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 lg:min-w-[400px]">
+          <div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm">
             <div className="flex-1">
               <ProductSearch />
             </div>
 
             {lastScanned && (
-              <div className="mr-2 hidden items-center text-sm text-slate-500 md:flex">
+              <div className="mr-1 hidden items-center text-xs text-slate-500 md:flex">
                 Ultimo:
-                <code className="ml-1 rounded bg-slate-100 px-1 py-0.5 font-mono font-bold tracking-tight text-indigo-600">
+                <code className="ml-1 rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px] font-bold tracking-tight text-indigo-600">
                   {lastScanned}
                 </code>
               </div>
@@ -110,7 +110,7 @@ export default function CajaPage() {
 
             <Badge
               variant="outline"
-              className={`shrink-0 px-3 py-1.5 ${
+              className={`shrink-0 px-2.5 py-1 text-xs ${
                 session
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-amber-200 bg-amber-50 text-amber-700"
@@ -118,10 +118,10 @@ export default function CajaPage() {
             >
               <Wifi className="mr-1.5 h-4 w-4" />
               {sessionLoading
-                ? "Inicializando caja local..."
+                ? "Inicializando dia actual..."
                 : session
-                  ? "Caja local activa"
-                  : "Reintentando sesion local..."}
+                  ? "Dia operativo listo"
+                  : "Reintentando dia actual..."}
             </Badge>
           </div>
 
@@ -129,27 +129,27 @@ export default function CajaPage() {
             <Cart />
           </div>
 
-          <div className="flex shrink-0 flex-row gap-4">
-            <div className="flex flex-1 flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+          <div className="flex shrink-0 flex-row items-stretch gap-2.5">
+            <div className="flex flex-1 flex-col gap-0.5 self-stretch rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
               <Label
                 htmlFor="notes"
-                className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
               >
-                <PenLine className="h-3 w-3" />
+                <PenLine className="h-2.5 w-2.5" />
                 Observaciones
               </Label>
               <Textarea
                 id="notes"
                 placeholder="Ej. Falta entregar producto, cliente VIP..."
-                className="flex-1 resize-none border-slate-200/60 bg-slate-50 font-medium text-slate-700 shadow-inner focus-visible:ring-indigo-500/30"
+                className="min-h-[60px] flex-1 resize-none border-slate-200/60 bg-slate-50 px-2.5 py-2 text-[13px] font-medium text-slate-700 shadow-inner focus-visible:ring-indigo-500/30"
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
                 disabled={isProcessing}
               />
             </div>
 
-            <div className="w-[300px] shrink-0 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm xl:w-[320px] 2xl:w-[380px]">
-              <div className="grid grid-cols-2 gap-3">
+            <div className="self-stretch w-[255px] shrink-0 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm xl:w-[275px] 2xl:w-[310px]">
+              <div className="mt-auto grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label
                     htmlFor="received"
@@ -166,7 +166,7 @@ export default function CajaPage() {
                       min="0"
                       step="0.01"
                       placeholder="0.00"
-                      className="h-10 border-emerald-200 bg-emerald-50/50 pl-7 font-mono text-lg font-bold text-emerald-900 shadow-inner focus-visible:ring-emerald-500/40"
+                      className="h-9 border-emerald-200 bg-emerald-50/50 pl-7 font-mono text-base font-bold text-emerald-900 shadow-inner focus-visible:ring-emerald-500/40"
                       value={amountReceived}
                       onChange={(event) => setAmountReceived(event.target.value)}
                       disabled={isProcessing}
@@ -179,7 +179,7 @@ export default function CajaPage() {
                     Cambio a entregar
                   </Label>
                   <div
-                    className={`flex h-10 items-center rounded-md border px-3 font-mono text-lg font-bold shadow-inner transition-colors ${
+                    className={`flex h-9 items-center rounded-md border px-3 font-mono text-base font-bold shadow-inner transition-colors ${
                       Number(amountReceived) >= total && Number(amountReceived) > 0
                         ? "border-slate-900 bg-slate-800 text-white shadow-slate-900/20"
                         : "border-slate-200 bg-slate-50 text-slate-400"
@@ -196,7 +196,7 @@ export default function CajaPage() {
           </div>
         </div>
 
-        <div className="hidden min-h-0 w-[300px] shrink-0 flex-col gap-4 lg:flex xl:w-[320px] 2xl:w-[380px]">
+        <div className="hidden min-h-0 w-[265px] shrink-0 flex-col gap-2.5 lg:flex xl:w-[280px] 2xl:w-[310px]">
           <SessionStats />
           <ExpensesPanel />
         </div>
@@ -236,3 +236,5 @@ export default function CajaPage() {
     </div>
   );
 }
+
+

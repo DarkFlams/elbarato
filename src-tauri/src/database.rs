@@ -8,7 +8,7 @@ use std::{
   time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OptionalExtension, ToSql};
+use rusqlite::{params, Connection, OptionalExtension, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -787,6 +787,8 @@ WHERE p.is_active = 1
     params.push(Box::new(owner_id.trim().to_string()));
   }
 
+  let mut search_term_for_order: Option<String> = None;
+
   if let Some(search) = filters.search.as_ref().filter(|value| !value.trim().is_empty()) {
     let trimmed = search.trim().to_string();
     let like = format!("%{trimmed}%");
@@ -794,6 +796,7 @@ WHERE p.is_active = 1
     params.push(Box::new(like.clone()));
     params.push(Box::new(like.clone()));
     params.push(Box::new(like));
+    search_term_for_order = Some(trimmed);
   }
 
   match filters.stock_filter.as_deref() {
@@ -803,7 +806,21 @@ WHERE p.is_active = 1
     _ => {}
   }
 
-  sql.push_str(" ORDER BY p.name ASC");
+  if let Some(exact_term) = search_term_for_order {
+    sql.push_str(
+      " ORDER BY 
+        CASE 
+          WHEN p.barcode COLLATE NOCASE = ? THEN 1
+          WHEN COALESCE(p.sku, '') COLLATE NOCASE = ? THEN 1
+          ELSE 2 
+        END ASC, 
+        p.name ASC",
+    );
+    params.push(Box::new(exact_term.clone()));
+    params.push(Box::new(exact_term));
+  } else {
+    sql.push_str(" ORDER BY p.name ASC");
+  }
 
   let limit = filters.limit.unwrap_or(50).max(1);
   let offset = filters.offset.unwrap_or(0).max(0);
@@ -1065,18 +1082,67 @@ fn build_datetime_range_clause(
 ) -> (String, Vec<Box<dyn ToSql>>) {
   let mut clause = String::new();
   let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+  let normalized_field = format!("datetime({field_name}, '-5 hours')");
 
   if let Some(from) = from_date.filter(|value| !value.trim().is_empty()) {
-    clause.push_str(&format!(" AND {field_name} >= ?"));
+    clause.push_str(&format!(" AND {normalized_field} >= ?"));
     params.push(Box::new(format!("{} 00:00:00", from.trim())));
   }
 
   if let Some(to) = to_date.filter(|value| !value.trim().is_empty()) {
-    clause.push_str(&format!(" AND {field_name} <= ?"));
+    clause.push_str(&format!(" AND {normalized_field} <= ?"));
     params.push(Box::new(format!("{} 23:59:59", to.trim())));
   }
 
   (clause, params)
+}
+
+fn ensure_today_local_cash_session(
+  transaction: &Transaction<'_>,
+) -> Result<(String, Option<String>), String> {
+  let existing_today = transaction
+    .query_row(
+      "SELECT local_id, remote_id
+       FROM cash_sessions
+       WHERE status = 'open'
+         AND date(opened_at, '-5 hours') = date('now', '-5 hours')
+       ORDER BY opened_at DESC
+       LIMIT 1",
+      [],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .map_err(|error| format!("No se pudo verificar el dia operativo actual: {error}"))?;
+
+  if let Some(session) = existing_today {
+    return Ok(session);
+  }
+
+  let session_id = Uuid::new_v4().to_string();
+
+  transaction
+    .execute(
+      "INSERT INTO cash_sessions (
+         local_id, opened_by_remote_id, opened_at, opening_cash, status, sync_status
+       ) VALUES (?1, NULL, CURRENT_TIMESTAMP, 0, 'open', 'pending')",
+      params![session_id.clone()],
+    )
+    .map_err(|error| format!("No se pudo crear el dia operativo local: {error}"))?;
+
+  let payload = serde_json::json!({
+    "openingCash": 0.0,
+  });
+
+  transaction
+    .execute(
+      "INSERT INTO sync_queue (
+         local_id, entity_name, entity_local_id, entity_remote_id, operation_type, payload_json, status
+       ) VALUES (?1, 'cash_sessions', ?2, NULL, 'insert', ?3, 'pending')",
+      params![Uuid::new_v4().to_string(), session_id.clone(), payload.to_string()],
+    )
+    .map_err(|error| format!("No se pudo encolar el dia operativo local: {error}"))?;
+
+  Ok((session_id, None))
 }
 
 #[tauri::command]
@@ -1138,6 +1204,7 @@ pub fn get_open_local_cash_session(
       "SELECT local_id, remote_id, opened_by_remote_id, opened_at, closed_at, opening_cash, closing_cash, status, notes
        FROM cash_sessions
        WHERE status = 'open'
+         AND date(opened_at, '-5 hours') = date('now', '-5 hours')
        ORDER BY opened_at DESC
        LIMIT 1",
     )
@@ -1164,6 +1231,7 @@ pub fn open_local_cash_session(
       "SELECT local_id, remote_id, opened_by_remote_id, opened_at, closed_at, opening_cash, closing_cash, status, notes
        FROM cash_sessions
        WHERE status = 'open'
+         AND date(opened_at, '-5 hours') = date('now', '-5 hours')
        ORDER BY opened_at DESC
        LIMIT 1",
       [],
@@ -1215,6 +1283,100 @@ pub fn open_local_cash_session(
       map_cash_session,
     )
     .map_err(|error| format!("No se pudo recargar sesion local creada: {error}"))
+}
+
+#[tauri::command]
+pub fn ensure_local_cash_sessions_sync_queued(
+  state: State<'_, DatabaseState>,
+) -> Result<i64, String> {
+  let mut connection = connection_from_state(&state)?;
+  let transaction = connection
+    .transaction()
+    .map_err(|error| format!("No se pudo abrir transaccion local para reparar sesiones: {error}"))?;
+
+  let sessions: Vec<(String, f64)> = {
+    let mut statement = transaction
+      .prepare(
+        "SELECT local_id, opening_cash
+         FROM cash_sessions
+         WHERE remote_id IS NULL",
+      )
+      .map_err(|error| format!("No se pudo preparar lectura de sesiones sin remote_id: {error}"))?;
+
+    let rows = statement
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, f64>(1)?,
+        ))
+      })
+      .map_err(|error| format!("No se pudieron leer sesiones locales pendientes: {error}"))?;
+
+    let mut values = Vec::new();
+    for row in rows {
+      values.push(row.map_err(|error| format!("No se pudo mapear sesion local pendiente: {error}"))?);
+    }
+    values
+  };
+
+  let mut repaired_count = 0_i64;
+
+  for (session_local_id, opening_cash) in sessions {
+    let existing_queue = transaction
+      .query_row(
+        "SELECT local_id, status
+         FROM sync_queue
+         WHERE entity_name = 'cash_sessions'
+           AND entity_local_id = ?1
+           AND operation_type = 'insert'
+         ORDER BY created_at DESC
+         LIMIT 1",
+        params![session_local_id.clone()],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+      )
+      .optional()
+      .map_err(|error| format!("No se pudo revisar la cola de la sesion local: {error}"))?;
+
+    match existing_queue {
+      Some((queue_id, status)) => {
+        if status != "pending" {
+          transaction
+            .execute(
+              "UPDATE sync_queue
+               SET status = 'pending',
+                   last_error = NULL,
+                   next_retry_at = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE local_id = ?1",
+              params![queue_id],
+            )
+            .map_err(|error| format!("No se pudo reactivar la cola de la sesion local: {error}"))?;
+          repaired_count += 1;
+        }
+      }
+      None => {
+        let payload = serde_json::json!({
+          "openingCash": opening_cash,
+        });
+
+        transaction
+          .execute(
+            "INSERT INTO sync_queue (
+               local_id, entity_name, entity_local_id, entity_remote_id, operation_type, payload_json, status
+             ) VALUES (?1, 'cash_sessions', ?2, NULL, 'insert', ?3, 'pending')",
+            params![Uuid::new_v4().to_string(), session_local_id, payload.to_string()],
+          )
+          .map_err(|error| format!("No se pudo recrear la cola de la sesion local: {error}"))?;
+        repaired_count += 1;
+      }
+    }
+  }
+
+  transaction
+    .commit()
+    .map_err(|error| format!("No se pudo confirmar reparacion de sesiones locales: {error}"))?;
+
+  Ok(repaired_count)
 }
 
 #[tauri::command]
@@ -1406,16 +1568,21 @@ pub fn upsert_local_expense(
     .transaction()
     .map_err(|error| format!("No se pudo abrir transaccion local para gasto: {error}"))?;
 
-  let Some((cash_session_local_id, cash_session_remote_id)) =
-    resolve_cash_session_local_id(&transaction, &input.cash_session_id)?
-  else {
-    return Err("No se encontro la sesion local para registrar el gasto".to_string());
-  };
-
   let existing = if let Some(expense_id) = input.expense_id.as_ref() {
     resolve_expense_local_id(&transaction, expense_id)?
   } else {
     None
+  };
+
+  let (cash_session_local_id, cash_session_remote_id) = if existing.is_some() {
+    let Some((session_local_id, session_remote_id)) =
+      resolve_cash_session_local_id(&transaction, &input.cash_session_id)?
+    else {
+      return Err("No se encontro el dia operativo para registrar el gasto".to_string());
+    };
+    (session_local_id, session_remote_id)
+  } else {
+    ensure_today_local_cash_session(&transaction)?
   };
 
   let expense_local_id = existing
@@ -1487,6 +1654,27 @@ pub fn upsert_local_expense(
     else {
       return Err(format!("No se encontro la socia local para asignar gasto: {partner_id}"));
     };
+
+    if input.scope == "shared" {
+      let (partner_name, partner_is_eligible) = transaction
+        .query_row(
+          "SELECT display_name, is_expense_eligible
+           FROM partners
+           WHERE local_id = ?1
+           LIMIT 1",
+          params![partner_local_id.clone()],
+          |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|error| {
+          format!("No se pudo validar elegibilidad local de socia para gasto compartido: {error}")
+        })?;
+
+      if partner_is_eligible != 1 {
+        return Err(format!(
+          "La socia \"{partner_name}\" no es elegible para gastos compartidos"
+        ));
+      }
+    }
 
     let mut amount = base_share;
     if index == 0 {
@@ -1584,11 +1772,8 @@ pub fn register_local_sale(
     }
   }
 
-  let Some((cash_session_local_id, cash_session_remote_id)) =
-    resolve_cash_session_local_id(&transaction, &input.cash_session_id)?
-  else {
-    return Err("No se encontro la sesion local para registrar la venta".to_string());
-  };
+  let (cash_session_local_id, cash_session_remote_id) =
+    ensure_today_local_cash_session(&transaction)?;
 
   let sale_local_id = Uuid::new_v4().to_string();
   let mut total = 0.0_f64;
@@ -3539,3 +3724,4 @@ pub fn print_text_ticket_silent(
     print_raw_bytes_to_windows_printer(&target_printer, &raw_bytes)
   }
 }
+

@@ -4,7 +4,7 @@
 
 -- Insertar socia Todos
 INSERT INTO partners (name, display_name, color_hex)
-VALUES ('todos', 'Todos', '#8B7A62')
+VALUES ('todos', 'Medias', '#8B7A62')
 ON CONFLICT (name) DO NOTHING;
 
 -- Actualizar funcion upsert con soporte SKU

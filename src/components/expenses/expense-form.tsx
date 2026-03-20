@@ -41,6 +41,10 @@ export function ExpenseForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitInFlightRef = useRef(false);
   const expenseRequestKeyRef = useRef<string | null>(null);
+  const sharedPartners = partners.filter(
+    (partner) => partner.is_expense_eligible && partner.name.toLowerCase() !== "todos"
+  );
+  const individualPartners = partners;
 
   const resetForm = () => {
     setAmount("");
@@ -63,14 +67,14 @@ export function ExpenseForm({
       return;
     }
     if (!cashSession) {
-      toast.error("No hay sesion de caja abierta");
+      toast.error("El dia operativo aun no esta listo");
       return;
     }
     if (scope === "individual" && !selectedPartnerId) {
       toast.error("Selecciona a quien pertenece el gasto");
       return;
     }
-    if (scope === "shared" && partners.length === 0) {
+    if (scope === "shared" && sharedPartners.length === 0) {
       toast.error("No hay socias disponibles para dividir el gasto");
       return;
     }
@@ -93,14 +97,14 @@ export function ExpenseForm({
         scope,
         partnerId: scope === "individual" ? selectedPartnerId : null,
         sharedPartnerIds:
-          scope === "shared" ? partners.map((partner) => partner.id) : null,
+          scope === "shared" ? sharedPartners.map((partner) => partner.id) : null,
         idempotencyKey: requestKey,
       });
 
       const scopeLabel =
         scope === "shared"
-          ? `Compartido ($${(numAmount / partners.length).toFixed(2)} c/u)`
-          : partners.find((p) => p.id === selectedPartnerId)?.display_name ??
+          ? `Compartido ($${(numAmount / Math.max(sharedPartners.length, 1)).toFixed(2)} c/u)`
+          : individualPartners.find((p) => p.id === selectedPartnerId)?.display_name ??
             "Individual";
 
       if (saveResult.mode === "queued") {
@@ -151,7 +155,7 @@ export function ExpenseForm({
             Registrar Gasto
           </DialogTitle>
           <DialogDescription>
-            Los gastos se descuentan de las ventas al cierre de caja.
+            Los gastos quedan registrados en el dia operativo actual.
           </DialogDescription>
         </DialogHeader>
 
@@ -218,7 +222,7 @@ export function ExpenseForm({
             <div className="space-y-2">
               <Label>Selecciona la socia</Label>
               <div className="grid grid-cols-3 gap-2">
-                {partners.map((partner) => {
+                {individualPartners.map((partner) => {
                   const config =
                     PARTNERS[partner.name as keyof typeof PARTNERS];
                   const isSelected = selectedPartnerId === partner.id;
@@ -282,3 +286,4 @@ export function ExpenseForm({
     </Dialog>
   );
 }
+

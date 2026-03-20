@@ -54,7 +54,7 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
     if (items.length === 0) return;
 
     if (!cashSession) {
-      toast.error("No hay sesion de caja abierta");
+      toast.error("El dia operativo aun no esta listo");
       return;
     }
 
@@ -226,3 +226,4 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
     </div>
   );
 }
+

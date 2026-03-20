@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createClient } from "@/lib/supabase/client";
 import { isMissingTauriCommandError, isTauriRuntime } from "@/lib/tauri-runtime";
+import { sortPartnersByBusinessOrder } from "@/lib/partners";
 import type { Partner, Product, ProductWithOwner } from "@/types/database";
 
 interface LocalPartnerRecord extends Partner {
@@ -80,12 +81,27 @@ interface UpsertLocalProductResult {
   movementDelta: number;
 }
 
+function normalizePartnerDisplayName(name: string | null | undefined, displayName: string): string {
+  if ((name || "").toLowerCase() === "todos") {
+    return "Medias";
+  }
+  return displayName;
+}
+
+function normalizePartnerRecord<T extends Pick<Partner, "name" | "display_name">>(partner: T): T {
+  return {
+    ...partner,
+    display_name: normalizePartnerDisplayName(partner.name, partner.display_name),
+  };
+}
+
 function mapLocalProduct(record: LocalProductRecord, owner: LocalPartnerRecord): ProductWithOwner {
+  const normalizedOwner = normalizePartnerRecord(owner);
   return {
     ...record,
     id: record.remote_id || record.id,
-    owner_id: owner.remote_id || owner.id,
-    owner,
+    owner_id: normalizedOwner.remote_id || normalizedOwner.id,
+    owner: normalizedOwner,
   };
 }
 
@@ -128,11 +144,14 @@ function mapRemoteProduct(data: ProductWithOwner[]): LocalProductRecord[] {
 }
 
 function mapRemotePartner(data: Partner[]): LocalPartnerRecord[] {
-  return data.map((partner) => ({
-    ...partner,
-    id: partner.id,
-    remote_id: partner.id,
-  }));
+  return data.map((partner) => {
+    const normalized = normalizePartnerRecord(partner);
+    return {
+      ...normalized,
+      id: normalized.id,
+      remote_id: normalized.id,
+    };
+  });
 }
 
 async function hydratePartnersFromSupabase() {
@@ -141,7 +160,9 @@ async function hydratePartnersFromSupabase() {
 
   if (error) throw error;
 
-  const partners = (data as Partner[]) || [];
+  const partners = sortPartnersByBusinessOrder(
+    ((data as Partner[]) || []).map((partner) => normalizePartnerRecord(partner))
+  );
   await invoke<number>("upsert_remote_partners", {
     partners: mapRemotePartner(partners),
   });
@@ -190,16 +211,20 @@ export async function getCatalogPartners() {
     const supabase = createClient();
     const { data, error } = await supabase.from("partners").select("*").order("name");
     if (error) throw error;
-    return (data as Partner[]) || [];
+    return sortPartnersByBusinessOrder(
+      ((data as Partner[]) || []).map((partner) => normalizePartnerRecord(partner))
+    );
   }
 
   try {
     const localPartners = await invoke<LocalPartnerRecord[]>("list_local_partners");
     if (localPartners.length > 0) {
-      return localPartners.map((partner) => ({
-        ...partner,
-        id: partner.remote_id || partner.id,
-      }));
+      return sortPartnersByBusinessOrder(
+        localPartners.map((partner) => ({
+          ...normalizePartnerRecord(partner),
+          id: partner.remote_id || partner.id,
+        }))
+      );
     }
 
     return hydratePartnersFromSupabase();
@@ -212,7 +237,9 @@ export async function getCatalogPartners() {
     const supabase = createClient();
     const { data, error: remoteError } = await supabase.from("partners").select("*").order("name");
     if (remoteError) throw remoteError;
-    return (data as Partner[]) || [];
+    return sortPartnersByBusinessOrder(
+      ((data as Partner[]) || []).map((partner) => normalizePartnerRecord(partner))
+    );
   }
 }
 

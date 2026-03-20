@@ -27,7 +27,7 @@ export function OfflineSyncIndicator() {
 
   return (
     <div
-      className={`mb-3 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${
+      className={`mb-2.5 flex items-center justify-between gap-2.5 rounded-lg border px-3 py-1.5 text-[13px] ${
         !isOnline
           ? "border-amber-300 bg-amber-50 text-amber-900"
           : failedCount > 0
@@ -43,7 +43,7 @@ export function OfflineSyncIndicator() {
         ) : (
           <CloudUpload className="h-4 w-4" />
         )}
-        <span className="font-medium">
+        <span className="font-medium leading-none">
           {!isOnline
             ? `Modo offline activo. Pendientes: ${pendingCount}`
             : failedCount > 0
@@ -60,7 +60,7 @@ export function OfflineSyncIndicator() {
           variant="outline"
           onClick={() => void runSync()}
           disabled={isSyncing}
-          className="h-7 border-current bg-transparent px-2 text-xs"
+          className="h-[26px] border-current bg-transparent px-2 text-[11px]"
         >
           <RefreshCw className={`mr-1 h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`} />
           Sincronizar

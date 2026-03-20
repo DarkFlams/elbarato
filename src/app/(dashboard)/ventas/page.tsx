@@ -26,8 +26,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
-import { getPartnerConfig, getPartnerConfigFromPartner } from "@/lib/partners";
+import {
+  getPartnerConfig,
+  getPartnerConfigFromPartner,
+  sortPartnersByBusinessOrder,
+} from "@/lib/partners";
 import type { Partner, Expense, ExpenseAllocation } from "@/types/database";
 import {
   getCashSessionReportLocalFirst,
@@ -35,6 +38,11 @@ import {
   getExpensesBySessionLocalFirst,
   getSalesHistoryLocalFirst,
 } from "@/lib/local/history";
+import {
+  formatEcuadorDate,
+  formatEcuadorTime,
+  toEcuadorDateInput,
+} from "@/lib/timezone-ecuador";
 
 interface ExpenseWithAllocations extends Expense {
   expense_allocations: ExpenseAllocation[];
@@ -53,15 +61,11 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 
-function formatDateInput(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
 export default function VentasPage() {
   const [sales, setSales] = useState<SaleDetailData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [fromDate, setFromDate] = useState(() => formatDateInput(new Date()));
-  const [toDate, setToDate] = useState(() => formatDateInput(new Date()));
+  const [fromDate, setFromDate] = useState(() => toEcuadorDateInput(new Date()));
+  const [toDate, setToDate] = useState(() => toEcuadorDateInput(new Date()));
   const [activePreset, setActivePreset] = useState<number | null>(1);
   const [selectedSale, setSelectedSale] = useState<SaleDetailData | null>(null);
   const [filterPartner, setFilterPartner] = useState<string | null>(null);
@@ -70,6 +74,7 @@ export default function VentasPage() {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithAllocations[]>([]);
   const [showExpensesDrawer, setShowExpensesDrawer] = useState(false);
+  const filterPartnerKeys = ["rosa", "lorena", "yadira", "todos"] as const;
 
   const fetchSales = useCallback(async () => {
     setIsLoading(true);
@@ -104,9 +109,10 @@ export default function VentasPage() {
         sessionIds.map((sessionId) => getExpensesBySessionLocalFirst(sessionId))
       );
 
-      setPartners(Array.from(fetchedPartnersMap.values()).filter((value, index, array) =>
-        array.findIndex((current) => current.id === value.id) === index
-      ));
+      const uniquePartners = Array.from(fetchedPartnersMap.values()).filter(
+        (value, index, array) => array.findIndex((current) => current.id === value.id) === index
+      );
+      setPartners(sortPartnersByBusinessOrder(uniquePartners));
       setExpenses(fetchedExpenses.flat() as unknown as ExpenseWithAllocations[]);
     } catch (err) {
       console.error("[VentasPage] fetch error:", err);
@@ -123,8 +129,8 @@ export default function VentasPage() {
     const end = new Date();
     const start = new Date();
     start.setDate(end.getDate() - (days - 1));
-    setFromDate(formatDateInput(start));
-    setToDate(formatDateInput(end));
+    setFromDate(toEcuadorDateInput(start));
+    setToDate(toEcuadorDateInput(end));
     setActivePreset(days);
   };
 
@@ -137,14 +143,14 @@ export default function VentasPage() {
   const hasFilters = Boolean(fromDate || toDate);
 
   const fmtDate = (d: string) =>
-    new Date(d).toLocaleDateString("es-EC", {
-      month: "short",
-      day: "numeric",
+    formatEcuadorDate(d, {
+      day: "2-digit",
+      month: "2-digit",
       year: "numeric",
     });
 
   const fmtTime = (d: string) =>
-    new Date(d).toLocaleTimeString("es-EC", {
+    formatEcuadorTime(d, {
       hour: "2-digit",
       minute: "2-digit",
     });
@@ -232,33 +238,51 @@ export default function VentasPage() {
     ? partners.find((p) => getPartnerConfigFromPartner(p).key === filterPartner)
     : null;
 
-  let totalSales = totalFilteredAmount;
-  let myExpenses: Array<{ id: string; description: string; amount: number; scope: string; date: string }> = [];
+  const totalSales = totalFilteredAmount;
+  const myExpenses: Array<{
+    id: string;
+    description: string;
+    amount: number;
+    scope: string;
+    date: string;
+  }> = (() => {
+    const rows: Array<{
+      id: string;
+      description: string;
+      amount: number;
+      scope: string;
+      date: string;
+    }> = [];
 
-  if (filterPartner && selectedPartnerDb) {
+    if (filterPartner && selectedPartnerDb) {
+      expenses.forEach((exp) => {
+        const myAlloc = exp.expense_allocations?.find(
+          (a) => a.partner_id === selectedPartnerDb.id
+        );
+        if (myAlloc && Number(myAlloc.amount) > 0) {
+          rows.push({
+            id: exp.id,
+            description: `${exp.description} (${exp.scope === "shared" ? "Compartido" : "Individual"})`,
+            amount: Number(myAlloc.amount),
+            scope: exp.scope,
+            date: exp.created_at,
+          });
+        }
+      });
+      return rows;
+    }
+
     expenses.forEach((exp) => {
-      const myAlloc = exp.expense_allocations?.find((a) => a.partner_id === selectedPartnerDb.id);
-      if (myAlloc && Number(myAlloc.amount) > 0) {
-        myExpenses.push({
-          id: exp.id,
-          description: `${exp.description} (${exp.scope === 'shared' ? 'Compartido' : 'Individual'})`,
-          amount: Number(myAlloc.amount),
-          scope: exp.scope,
-          date: exp.created_at,
-        });
-      }
-    });
-  } else {
-    expenses.forEach((exp) => {
-      myExpenses.push({
+      rows.push({
         id: exp.id,
-        description: `${exp.description} (${exp.scope === 'shared' ? 'Compartido' : 'Individual'})`,
+        description: `${exp.description} (${exp.scope === "shared" ? "Compartido" : "Individual"})`,
         amount: Number(exp.amount),
         scope: exp.scope,
         date: exp.created_at,
       });
     });
-  }
+    return rows;
+  })();
 
   const totalExpensesAmount = myExpenses.reduce((sum, e) => sum + e.amount, 0);
   const netIncome = totalSales - totalExpensesAmount;
@@ -303,7 +327,7 @@ export default function VentasPage() {
           >
             Todas
           </button>
-          {["rosa", "lorena", "yadira"].map((key) => {
+          {filterPartnerKeys.map((key) => {
             const conf = getPartnerConfig({ name: key });
             const isSelected = filterPartner === key;
             return (
@@ -461,99 +485,65 @@ export default function VentasPage() {
               <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                 <tr>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest">
-                    Orden #
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest">
-                    Fecha
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest">
-                    Prendas de
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest">
-                    Productos
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest">
-                    Pago
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-xs text-slate-500 uppercase tracking-widest text-right">
-                    Total
-                  </th>
+                  <th className="w-24 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Orden #</th>
+                  <th className="w-28 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Fecha</th>
+                  <th className="w-16 px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Hora</th>
+                  <th className="w-12 px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">Cant.</th>
+                  <th className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Productos</th>
+                  <th className="w-24 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Pago</th>
+                  <th className="w-24 px-4 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
+              <tbody className="bg-white">
                 {filteredSales.map((sale) => {
-                  const uniqueOwners = getUniqueOwnersConfigs(sale.displayItems);
+                  const totalItems = sale.displayItems.reduce((sum, item) => sum + item.quantity, 0);
                   
-                  // Resumen de productos truncado "2x Blusa, 1x Jeans..."
+                  // Resumen de productos sin el prefijo de cantidad
                   let productsSummary = sale.displayItems
-                    .map((item) => `${item.quantity}x ${item.product_name}`)
+                    .map((item) => item.product_name)
                     .join(", ");
-                  if (productsSummary.length > 40) {
-                    productsSummary = productsSummary.substring(0, 40) + "...";
+                  if (productsSummary.length > 50) {
+                    productsSummary = productsSummary.substring(0, 50) + "...";
                   }
 
                   return (
                     <tr
                       key={sale.id}
                       onClick={() => setSelectedSale(sale)}
-                      className="hover:bg-indigo-50/30 cursor-pointer transition-colors group"
+                      className="group transition-colors hover:bg-slate-50 border-b border-slate-100/60 cursor-pointer"
                     >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className="font-mono text-sm font-semibold text-slate-700 group-hover:text-indigo-700">
-                            #{sale.id.slice(0, 8).toUpperCase()}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-slate-900">
-                            {fmtDate(sale.created_at)}
-                          </span>
-                          <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full font-mono">
-                            {fmtTime(sale.created_at)}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {uniqueOwners.length > 0 ? (
-                            uniqueOwners.map((conf) => (
-                              <Badge
-                                key={conf.key}
-                                variant="outline"
-                                className="font-medium bg-transparent border-transparent px-0 mr-2"
-                                style={{ color: conf.color }}
-                              >
-                                <span
-                                  className="w-2 h-2 rounded-full mr-1.5"
-                                  style={{ backgroundColor: conf.color }}
-                                />
-                                {conf.displayName}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-xs text-slate-400 italic">Sin especificar</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {productsSummary || (
-                          <span className="text-slate-400 italic">
-                            Sin items detallados
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">
-                          {sale.payment_method === "cash"
-                            ? "Efectivo"
-                            : "Transferencia"}
+                      <td className="px-4 py-1.5 align-middle">
+                        <span className="block font-mono text-[11px] font-medium text-slate-800 uppercase group-hover:text-amber-700 transition-colors">
+                          #{sale.id.slice(0, 8)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-base font-bold font-mono text-slate-900">
+                      <td className="px-4 py-1.5 align-middle">
+                        <span className="text-[11px] font-medium text-slate-900 leading-tight block">
+                          {fmtDate(sale.created_at)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 align-middle">
+                        <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                          {fmtTime(sale.created_at)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-center align-middle">
+                        <span className="block font-mono text-[13px] font-bold text-slate-900">
+                          {totalItems}
+                        </span>
+                      </td>
+                      <td className="px-4 py-1.5 align-middle">
+                        <span className="text-[11px] text-slate-600 truncate block max-w-[250px]" title={sale.displayItems.map((item) => `${item.quantity}x ${item.product_name}`).join(", ")}>
+                          {productsSummary || <span className="text-[10px] text-slate-300 italic">-</span>}
+                        </span>
+                      </td>
+                      <td className="px-4 py-1.5 align-middle">
+                        <span className="text-[10px] font-semibold uppercase tracking-tighter text-slate-500">
+                          {sale.payment_method === "cash" ? "Efectivo" : "Transfer."}
+                        </span>
+                      </td>
+                      <td className="px-4 py-1.5 text-right align-middle">
+                        <span className="font-mono text-[13px] font-bold tabular-nums text-slate-900">
                           ${sale.displayTotal.toFixed(2)}
                         </span>
                       </td>

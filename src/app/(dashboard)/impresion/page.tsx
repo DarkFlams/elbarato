@@ -28,6 +28,7 @@ import {
   type LocalPrinterInfo,
 } from "@/lib/local/printers";
 import { isTauriRuntime } from "@/lib/tauri-runtime";
+import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 const WINDOWS_DEFAULT_VALUE = "__WINDOWS_DEFAULT__";
 
@@ -39,7 +40,7 @@ function buildPrinterTestTicket(printerName: string | null) {
     "POS Tienda de Ropa",
     "prueba de impresion",
     "",
-    `Fecha: ${now.toLocaleDateString("es-CO")} ${now.toLocaleTimeString("es-CO")}`,
+    `Fecha: ${formatEcuadorDate(now)} ${formatEcuadorTime(now)}`,
     `Impresora: ${printerLabel}`,
     "--------------------------------",
     "Si este ticket sale bien,",

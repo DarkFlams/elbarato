@@ -19,6 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { getSessionExpensesLocalFirst } from "@/lib/local/cash-expenses";
 import { PARTNERS } from "@/lib/constants";
+import { formatEcuadorTime } from "@/lib/timezone-ecuador";
 import type { CashSession, Expense, ExpenseAllocation, Partner } from "@/types/database";
 
 interface ExpenseWithAllocations extends Expense {
@@ -72,7 +73,7 @@ export function ExpenseList({
   }, [fetchExpenses, refreshTrigger]);
 
   const formatTime = (dateStr: string) => {
-    return new Date(dateStr).toLocaleTimeString("es-EC", {
+    return formatEcuadorTime(dateStr, {
       hour: "2-digit",
       minute: "2-digit",
     });

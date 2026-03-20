@@ -67,6 +67,7 @@ export const useCart = create<CartState>((set, get) => ({
       const newItem: CartItem = {
         product_id: product.id,
         barcode: product.barcode,
+        sku: product.sku,
         name: product.name,
         owner_id: product.owner_id,
         owner_name: product.owner.name,
