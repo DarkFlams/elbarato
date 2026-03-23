@@ -29,6 +29,7 @@ export interface LocalCatalogBootstrapResult {
   seeded: boolean;
   requiresInternet: boolean;
   productCount: number;
+  needsRefresh: boolean;
 }
 
 function mapRemoteProductForLocal(product: ProductWithOwner) {
@@ -143,24 +144,34 @@ export async function getLocalCatalogBootstrapState(): Promise<LocalCatalogBoots
       seeded: true,
       requiresInternet: false,
       productCount: 0,
+      needsRefresh: false,
     };
   }
 
-  const [seededSetting, bootstrapVersionSetting, productKeys] = await Promise.all([
+  const [seededSetting, bootstrapVersionSetting, seededAtSetting, seedCountSetting, productKeys] = await Promise.all([
     getLocalAppSetting("catalog_seeded"),
     getLocalAppSetting("catalog_bootstrap_version"),
+    getLocalAppSetting("catalog_seeded_at"),
+    getLocalAppSetting("catalog_seed_count"),
     getLocalProductKeys(),
   ]);
 
-  const seeded = seededSetting?.value === "1";
+  const seedCount = Number(seedCountSetting?.value ?? "0");
+  const hasSuccessfulSeedHistory =
+    Boolean(seededAtSetting?.value) && Number.isFinite(seedCount) && seedCount > 0;
+  const seeded = seededSetting?.value === "1" || hasSuccessfulSeedHistory;
   const versionMatches =
     bootstrapVersionSetting?.value === LOCAL_CATALOG_BOOTSTRAP_VERSION;
+  const productCount = productKeys.length;
+  const ready = seeded && productCount > 0;
+  const needsRefresh = ready && !versionMatches;
 
   return {
-    ready: seeded && versionMatches && productKeys.length > 0,
+    ready,
     seeded,
     requiresInternet: false,
-    productCount: productKeys.length,
+    productCount,
+    needsRefresh,
   };
 }
 
@@ -173,24 +184,28 @@ export async function ensureInitialLocalCatalog(
       seeded: true,
       requiresInternet: false,
       productCount: 0,
+      needsRefresh: false,
     };
   }
 
   const currentState = await getLocalCatalogBootstrapState();
-  if (currentState.ready) {
+  if (currentState.ready && !currentState.needsRefresh) {
     return currentState;
   }
 
   if (typeof navigator !== "undefined" && !navigator.onLine) {
+    if (currentState.ready) {
+      return currentState;
+    }
+
     return {
       ready: false,
       seeded: currentState.seeded,
       requiresInternet: true,
       productCount: currentState.productCount,
+      needsRefresh: true,
     };
   }
-
-  await setLocalAppSetting("catalog_seeded", "0");
 
   const partners = await fetchAllRemotePartners();
   onProgress?.({
@@ -234,5 +249,6 @@ export async function ensureInitialLocalCatalog(
     seeded: true,
     requiresInternet: false,
     productCount: processed,
+    needsRefresh: false,
   };
 }

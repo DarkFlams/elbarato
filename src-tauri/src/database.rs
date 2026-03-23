@@ -3578,10 +3578,22 @@ pub fn upsert_remote_products(
         .map_err(|error| format!("No se pudo abrir transaccion local para productos: {error}"))?;
 
     for product in &products {
-        let local_id = product
+        let remote_product_id = product
             .remote_id
             .clone()
             .unwrap_or_else(|| product.id.clone());
+        let local_id = transaction
+            .query_row(
+                "SELECT local_id
+                 FROM products
+                 WHERE local_id = ?1 OR remote_id = ?1 OR local_id = ?2 OR remote_id = ?2
+                 LIMIT 1",
+                params![product.id, remote_product_id.clone()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("No se pudo resolver producto remoto en base local: {error}"))?
+            .unwrap_or_else(|| remote_product_id.clone());
         let owner_local_id = product.owner_id.clone();
 
         transaction
@@ -3627,7 +3639,7 @@ pub fn upsert_remote_products(
         "#,
                 params![
                     local_id,
-                    product.remote_id,
+                    remote_product_id,
                     product.barcode,
                     product.sku,
                     product.name,

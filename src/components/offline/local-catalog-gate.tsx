@@ -12,6 +12,26 @@ interface LocalCatalogGateProps {
 
 type GateStatus = "checking" | "syncing" | "blocked" | "ready" | "error";
 
+function getBootstrapErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Error desconocido";
+  }
+}
+
 export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
   const [status, setStatus] = useState<GateStatus>("checking");
   const [message, setMessage] = useState("Verificando base local...");
@@ -33,6 +53,16 @@ export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
       const state = await getLocalCatalogBootstrapState();
       if (state.ready) {
         setStatus("ready");
+
+        if (state.needsRefresh && (typeof navigator === "undefined" || navigator.onLine)) {
+          void ensureInitialLocalCatalog().catch((error) => {
+            console.warn(
+              "[local-catalog-gate] background catalog refresh failed:",
+              getBootstrapErrorMessage(error)
+            );
+          });
+        }
+
         return;
       }
 
@@ -70,7 +100,7 @@ export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
     } catch (error) {
       setStatus("error");
       setMessage("Fallo la preparacion inicial del catalogo local.");
-      setDetail(error instanceof Error ? error.message : "Error desconocido");
+      setDetail(getBootstrapErrorMessage(error));
     }
   }, []);
 

@@ -118,6 +118,7 @@ export default function OfflinePage() {
     seeded: boolean;
     requiresInternet: boolean;
     productCount: number;
+    needsRefresh: boolean;
   } | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [isSyncingManual, setIsSyncingManual] = useState(false);
@@ -338,7 +339,9 @@ export default function OfflinePage() {
           </p>
           <p className="mt-1 text-xs text-slate-500">
             {catalogState?.ready
-              ? "Base local lista"
+              ? catalogState.needsRefresh
+                ? "Base local util, refresco pendiente"
+                : "Base local lista"
               : catalogState?.seeded
               ? "Sembrado parcial"
               : "Pendiente de descarga"}
@@ -370,7 +373,7 @@ export default function OfflinePage() {
       {catalogState && (
         <div
           className={
-            catalogState.ready
+            catalogState.ready && !catalogState.needsRefresh
               ? "rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
               : "rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"
           }
@@ -379,7 +382,9 @@ export default function OfflinePage() {
             <div>
               <p className="font-semibold">
                 {catalogState.ready
-                  ? "La base local del inventario ya esta lista en esta PC."
+                  ? catalogState.needsRefresh
+                    ? "La base local ya sirve, pero aun tiene una actualizacion pendiente."
+                    : "La base local del inventario ya esta lista en esta PC."
                   : "La base local todavia no esta completa."}
               </p>
               <p className="mt-1 text-xs opacity-90">
@@ -390,12 +395,16 @@ export default function OfflinePage() {
             <Badge
               variant="outline"
               className={
-                catalogState.ready
+                catalogState.ready && !catalogState.needsRefresh
                   ? "border-emerald-300 bg-white text-emerald-700"
                   : "border-amber-300 bg-white text-amber-700"
               }
             >
-              {catalogState.ready ? "Listo para offline" : "Falta bootstrap"}
+              {catalogState.ready
+                ? catalogState.needsRefresh
+                  ? "Usable, pendiente refresco"
+                  : "Listo para offline"
+                : "Falta bootstrap"}
             </Badge>
           </div>
         </div>
