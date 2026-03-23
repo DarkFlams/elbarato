@@ -1,12 +1,22 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Minus, Plus, X } from "lucide-react";
+import { ChevronDown, Minus, Plus, X } from "lucide-react";
 import { PRICE_TIER_OPTIONS, getPriceForTier, getTierLabel } from "@/lib/pricing";
-import { cn } from "@/lib/utils";
 import type { CartItem as CartItemType } from "@/types/database";
 import { useCart } from "@/hooks/use-cart";
 import { toast } from "sonner";
+import { getPartnerVisual } from "@/components/inventory/inventory-ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface CartItemProps {
   item: CartItemType;
@@ -16,7 +26,9 @@ interface CartItemProps {
 export function CartItemRow({ item, index }: CartItemProps) {
   const { updateQuantity, removeItem, updatePrice, updatePriceTier } = useCart();
   const isOutOfStock = item.quantity > item.available_stock;
+  const ownerVisual = getPartnerVisual(item.owner_name);
   const [editingPrice, setEditingPrice] = useState(false);
+  const [priceMenuOpen, setPriceMenuOpen] = useState(false);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -57,6 +69,8 @@ export function CartItemRow({ item, index }: CartItemProps) {
         description: `${item.name} no tiene configurado ese tier.`,
       });
     }
+
+    setPriceMenuOpen(false);
   };
 
   return (
@@ -80,11 +94,11 @@ export function CartItemRow({ item, index }: CartItemProps) {
       <td className="px-2 py-1.5 relative border-b border-slate-100/60">
         <div 
           className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-md"
-          style={{ backgroundColor: item.owner_color }}
+          style={{ backgroundColor: ownerVisual.accent }}
           title={item.owner_display_name}
         />
-        <div className="flex flex-col justify-center pl-1.5 w-[140px] 2xl:w-[200px]">
-          <span className="truncate text-[12px] font-semibold text-slate-800 leading-tight block">
+        <div className="flex min-w-0 flex-col justify-center pl-2 pr-1">
+          <span className="line-clamp-2 block break-words text-[12px] font-semibold leading-tight text-slate-800">
             {item.name}
           </span>
           {isOutOfStock && (
@@ -114,42 +128,56 @@ export function CartItemRow({ item, index }: CartItemProps) {
         </div>
       </td>
       <td className="px-2 py-1.5 text-right border-b border-slate-100/60">
-        <div className="flex flex-col items-end gap-1">
-          <div className="font-mono text-[12px] tabular-nums text-slate-500">
-            ${item.price_override.toFixed(2)}
-          </div>
-          <div className="inline-flex items-center gap-0.5 rounded border border-slate-200 bg-slate-50 p-0.5">
-            {PRICE_TIER_OPTIONS.map((option) => {
-              const tierPrice = getPriceForTier(item, option.value);
-              const isDisabled =
-                tierPrice === null || tierPrice === undefined || tierPrice <= 0;
-              const isActive = item.price_tier === option.value;
+        <DropdownMenu open={priceMenuOpen} onOpenChange={setPriceMenuOpen}>
+          <DropdownMenuTrigger
+            className="ml-auto inline-flex h-7 min-w-[64px] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+            title={`Cambiar precio unitario (${item.price_tier === "manual" ? "Manual" : getTierLabel(item.price_tier)})`}
+          >
+            <span className="font-mono text-[12px] tabular-nums text-slate-600">
+              ${item.price_override.toFixed(2)}
+            </span>
+            <ChevronDown className="h-3 w-3 text-slate-400" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[190px]">
+            <DropdownMenuGroup>
+            <DropdownMenuLabel>Precio unitario</DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuRadioGroup
+              value={item.price_tier === "manual" ? "" : item.price_tier}
+              onValueChange={(value) =>
+                handleTierChange(value as (typeof PRICE_TIER_OPTIONS)[number]["value"])
+              }
+            >
+              {PRICE_TIER_OPTIONS.map((option) => {
+                const tierPrice = getPriceForTier(item, option.value);
+                const isDisabled =
+                  tierPrice === null || tierPrice === undefined || tierPrice <= 0;
 
-              return (
-                <button
-                  key={`${item.id}-${option.value}`}
-                  type="button"
-                  disabled={isDisabled}
-                  onClick={() => handleTierChange(option.value)}
-                  className={cn(
-                    "rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors",
-                    isActive
-                      ? "bg-slate-900 text-white"
-                      : "text-slate-500 hover:bg-white hover:text-slate-900",
-                    isDisabled && "cursor-not-allowed text-slate-300 hover:bg-transparent hover:text-slate-300"
-                  )}
-                >
-                  {option.value === "normal" ? "N" : option.shortLabel}
-                </button>
-              );
-            })}
+                return (
+                  <DropdownMenuRadioItem
+                    key={`${item.id}-${option.value}`}
+                    value={option.value}
+                    disabled={isDisabled}
+                    className="cursor-pointer"
+                  >
+                    <span>{getTierLabel(option.value)}</span>
+                    <span className="ml-auto font-mono text-[12px] text-slate-500">
+                      {isDisabled ? "N/D" : `$${Number(tierPrice).toFixed(2)}`}
+                    </span>
+                  </DropdownMenuRadioItem>
+                );
+              })}
+            </DropdownMenuRadioGroup>
             {item.price_tier === "manual" && (
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
-                M
-              </span>
+              <>
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-[11px] text-amber-700">
+                  Precio manual activo
+                </div>
+              </>
             )}
-          </div>
-        </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </td>
       <td className="px-2 py-1.5 text-right border-b border-slate-100/60">
         {editingPrice ? (

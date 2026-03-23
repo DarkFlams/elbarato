@@ -40,41 +40,6 @@ interface ProductFormProps {
   showDefaultTrigger?: boolean;
 }
 
-const SIZE_SPLIT_REGEX = /[\s,;/|]+/g;
-
-function normalizeSizeToken(token: string): string {
-  const trimmed = token.trim();
-  if (!trimmed) return "";
-
-  if (/^[a-zA-Z]+$/.test(trimmed)) {
-    return trimmed.toUpperCase();
-  }
-
-  return trimmed;
-}
-
-function parseSizesInput(raw: string): string[] {
-  const unique = new Set<string>();
-  const tokens = raw
-    .split(SIZE_SPLIT_REGEX)
-    .map((token) => normalizeSizeToken(token))
-    .filter(Boolean);
-
-  for (const token of tokens) {
-    unique.add(token);
-  }
-
-  return Array.from(unique);
-}
-
-function parseSizesFromDescription(raw: string | null): string[] {
-  if (!raw) return [];
-
-  const sizesMatch = raw.match(/Tallas:\s*([^|]+)/i);
-  const source = sizesMatch?.[1] ?? raw;
-  return parseSizesInput(source.replace(/,/g, " "));
-}
-
 async function generateUniqueBarcode(): Promise<string> {
   return generateCatalogBarcode();
 }
@@ -118,7 +83,7 @@ async function upsertProductRemote(input: {
     p_product_id: input.productId ?? null,
     p_barcode: input.barcode,
     p_name: input.name.trim(),
-    p_description: input.description ?? null,
+    p_description: null, // Ya no usamos descripciones autogeneradas de tallas
     p_category: null,
     p_owner_id: input.ownerId,
     p_purchase_price: 0,
@@ -155,7 +120,6 @@ export function ProductForm({
   const [barcode, setBarcode] = useState("");
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
-  const [sizesText, setSizesText] = useState("");
   const [ownerId, setOwnerId] = useState<string>("");
   const [salePrice, setSalePrice] = useState("");
   const [salePriceX3, setSalePriceX3] = useState("");
@@ -163,13 +127,16 @@ export function ProductForm({
   const [salePriceX12, setSalePriceX12] = useState("");
   const [stock, setStock] = useState("");
   const [minStock, setMinStock] = useState("2");
+  
+  // UX State
+  const [showWholesale, setShowWholesale] = useState(false);
+
   const open = controlledOpen ?? internalOpen;
   const setOpen = useCallback(
     (nextOpen: boolean) => {
       if (controlledOpen === undefined) {
         setInternalOpen(nextOpen);
       }
-
       onOpenChange?.(nextOpen);
     },
     [controlledOpen, onOpenChange]
@@ -177,7 +144,6 @@ export function ProductForm({
 
   useEffect(() => {
     if (product && open) {
-      const parsedSizes = parseSizesFromDescription(product.description);
       setBarcode(product.barcode);
       setSku(product.sku || "");
       setName(product.name);
@@ -188,7 +154,13 @@ export function ProductForm({
       setSalePriceX12(product.sale_price_x12 !== null ? String(product.sale_price_x12) : "");
       setStock(String(product.stock));
       setMinStock(String(product.min_stock));
-      setSizesText(parsedSizes.join(" "));
+      
+      // Auto-expandir precios al por mayor si la prenda ya tiene configurado alguno
+      if (product.sale_price_x3 || product.sale_price_x6 || product.sale_price_x12) {
+        setShowWholesale(true);
+      } else {
+        setShowWholesale(false);
+      }
       return;
     }
 
@@ -201,7 +173,6 @@ export function ProductForm({
     setBarcode("");
     setSku("");
     setName("");
-    setSizesText("");
     setOwnerId("");
     setSalePrice("");
     setSalePriceX3("");
@@ -209,6 +180,7 @@ export function ProductForm({
     setSalePriceX12("");
     setStock("");
     setMinStock("2");
+    setShowWholesale(false);
   };
 
   const parseOptionalPrice = (raw: string, label: string) => {
@@ -217,7 +189,7 @@ export function ProductForm({
 
     const parsed = parseFloat(trimmed);
     if (!Number.isFinite(parsed) || parsed < 0) {
-      throw new Error(`Ingresa un ${label} valido`);
+      throw new Error(`Revisa el ${label}`);
     }
 
     return parsed;
@@ -225,19 +197,17 @@ export function ProductForm({
 
   const handleSubmit = async () => {
     if (!name.trim()) {
-      toast.error("Ingresa el nombre de la prenda");
+      toast.error("Falta el nombre de la prenda");
       return;
     }
 
-    const parsedSizes = parseSizesInput(sizesText);
-
     if (!ownerId) {
-      toast.error("Selecciona la socia duena");
+      toast.error("Selecciona la dueña");
       return;
     }
 
     if (!salePrice || parseFloat(salePrice) <= 0) {
-      toast.error("Ingresa un precio de venta valido");
+      toast.error("Falta el precio base");
       return;
     }
 
@@ -249,7 +219,7 @@ export function ProductForm({
         const taken = await isSkuTaken(trimmedSku, isEditing && product ? product.id : undefined);
         if (taken) {
           toast.error("Ese SKU ya existe", {
-            description: `El codigo \"${trimmedSku}\" ya esta asignado a otro producto.`,
+            description: `El código "${trimmedSku}" ya lo tiene otra prenda.`,
           });
           setIsSubmitting(false);
           return;
@@ -263,7 +233,6 @@ export function ProductForm({
       const parsedStock = parseInt(stock, 10) || 0;
       const parsedMinStock = parseInt(minStock, 10) || 0;
       const finalBarcode = isEditing ? barcode : await generateUniqueBarcode();
-      const finalDescription = parsedSizes.length > 0 ? `Tallas: ${parsedSizes.join(", ")}` : null;
 
       const result = await saveCatalogProduct({
         productId: isEditing && product ? product.id : null,
@@ -271,7 +240,7 @@ export function ProductForm({
         barcode: finalBarcode,
         sku: trimmedSku || null,
         name: name.trim(),
-        description: finalDescription,
+        description: null,
         category: null,
         ownerId,
         purchasePrice: 0,
@@ -289,7 +258,7 @@ export function ProductForm({
           barcode: finalBarcode,
           sku: trimmedSku || null,
           name: name.trim(),
-          description: finalDescription,
+          description: null,
           ownerId,
           salePrice: parsedSalePrice,
           salePriceX3: parsedSalePriceX3,
@@ -302,31 +271,33 @@ export function ProductForm({
 
       const movementDelta = Number(result?.movement_delta || result?.movementDelta || 0);
 
-      if (isEditing) {
-        toast.success(`\"${name}\" actualizado`, {
-          description:
-            movementDelta !== 0
-              ? `Ajuste de stock: ${movementDelta > 0 ? "+" : ""}${movementDelta}`
-              : "Datos actualizados",
-        });
-      } else {
-        toast.success(`\"${name}\" creado`, {
-          description:
-            movementDelta !== 0
-              ? `Codigo: ${finalBarcode} | Stock inicial: ${movementDelta}`
-              : `Codigo: ${finalBarcode}`,
-        });
-      }
+      toast.success(isEditing ? "Prenda actualizada" : "Prenda creada", {
+        description: isEditing
+          ? (movementDelta !== 0 ? `Ajuste de stock: ${movementDelta > 0 ? "+" : ""}${movementDelta}` : "Los datos se guardaron.")
+          : `SKU: ${trimmedSku || finalBarcode} | Ingreso: ${movementDelta}`,
+      });
 
       resetForm();
       setOpen(false);
       onSaved?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error al guardar";
-      toast.error("Error al guardar producto", { description: message });
+      toast.error("Error al guardar", { description: message });
       console.error("[ProductForm] submit error:", err);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Keyboard navigation helper for seamless fluid input
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, nextId?: string) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (nextId) {
+        document.getElementById(nextId)?.focus();
+      } else {
+        handleSubmit();
+      }
     }
   };
 
@@ -345,221 +316,218 @@ export function ProductForm({
         </DialogTrigger>
       ) : null}
 
-      <DialogContent className="max-h-[90vh] overflow-y-auto border-slate-200 bg-white shadow-xl sm:max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-              <Package className="h-4 w-4 text-slate-700" />
-            </div>
-            {isEditing ? "Editar prenda" : "Nueva prenda"}
-          </DialogTitle>
-          <DialogDescription>Codigo, nombre, socia, precio y stock.</DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          {isEditing ? (
-            <div className="space-y-2">
-              <Label htmlFor="prod-barcode" className="flex items-center gap-2">
-                <ScanLine className="h-4 w-4 text-slate-400" />
-                Codigo de barras
-              </Label>
+      <DialogContent className="max-h-[90vh] overflow-y-auto bg-white shadow-2xl sm:max-w-[480px] p-0 border-0 rounded-2xl">
+        <div className="flex flex-col h-full">
+          
+          {/* Cabecera Clásica Estilizada */}
+          <div className="bg-slate-50 px-6 pt-8 pb-6 border-b border-slate-100 flex flex-col gap-4">
+            {!isEditing && (
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 uppercase tracking-widest mb-1">
+                <ScanLine className="h-3.5 w-3.5" />
+                <span className="opacity-90">BARRAS AUTOMÁTICO</span>
+              </div>
+            )}
+            
+            <div className="relative group w-full">
+              <span className="absolute -top-2 left-2 bg-slate-50 px-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider z-10 transition-colors group-focus-within:text-indigo-500">Nombre de la Prenda</span>
               <Input
-                id="prod-barcode"
-                value={barcode}
-                readOnly
-                className="cursor-not-allowed border-slate-200 bg-slate-50 font-mono text-slate-500 shadow-sm"
+                id="field-name"
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, "field-sku")}
+                className="bg-white border-slate-200 shadow-sm focus-visible:border-indigo-400 focus-visible:ring-indigo-400/20 h-11 placeholder:text-transparent text-slate-900 font-medium"
+                placeholder="Nombre"
+                autoComplete="off"
               />
             </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-              <ScanLine className="h-4 w-4" />
-              El codigo de barras se generara automaticamente al crear la prenda.
+            
+            <div className="flex items-center gap-4 mt-1">
+              <div className="relative group flex-1">
+                <span className="absolute -top-2 left-2 bg-slate-50 px-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider z-10 transition-colors group-focus-within:text-indigo-500">CÓDIGO</span>
+                <Input
+                  id="field-sku"
+                  value={sku}
+                  onChange={(e) => setSku(e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(e, "field-price")}
+                  className="font-mono bg-white border-slate-200 shadow-sm focus-visible:border-indigo-400 focus-visible:ring-indigo-400/20 h-11 placeholder:text-transparent"
+                  placeholder="Código"
+                  autoComplete="off"
+                />
+              </div>
+
+              {isEditing && (
+                <div className="relative flex-1">
+                  <span className="absolute -top-2 left-2 bg-slate-50 px-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider z-10">BARRAS</span>
+                  <Input
+                    value={barcode}
+                    readOnly
+                    className="font-mono bg-slate-100 border-transparent text-slate-500 shadow-none cursor-not-allowed h-11"
+                  />
+                </div>
+              )}
             </div>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="prod-name">Nombre de la prenda *</Label>
-            <Input
-              id="prod-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Ej: Jean recto tiro alto"
-              className="border-slate-200 bg-white shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-            />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="prod-sku" className="flex items-center gap-2">
-              <Package className="h-4 w-4 text-slate-400" />
-              Codigo interno (SKU)
-            </Label>
-            <Input
-              id="prod-sku"
-              value={sku}
-              onChange={(event) => setSku(event.target.value)}
-              placeholder="Ej: BEY12"
-              className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-            />
-          </div>
+          <div className="px-6 py-6 space-y-8">
+            
+            {/* Fila Principal: Precio y Stock */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="field-price" className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Precio ($)</Label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-lg">$</span>
+                  <Input
+                    id="field-price"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={salePrice}
+                    onChange={(e) => setSalePrice(e.target.value)}
+                    onKeyDown={(e) => handleKeyDown(e, "field-stock")}
+                    className="pl-8 text-xl font-bold h-12 bg-slate-50 border-transparent focus-visible:bg-white focus-visible:border-emerald-400 focus-visible:ring-emerald-400/20 tabular-nums placeholder:text-transparent"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="prod-sizes">Tallas</Label>
-            <Input
-              id="prod-sizes"
-              value={sizesText}
-              onChange={(event) => setSizesText(event.target.value)}
-              placeholder="Ej: S M L 28 30 32"
-              className="border-slate-200 bg-white shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-            />
-          </div>
+              <div>
+                <Label htmlFor="field-stock" className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Stock Físico</Label>
+                <Input
+                  id="field-stock"
+                  type="number"
+                  value={stock}
+                  onChange={(e) => setStock(e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(e)}
+                  className="text-xl font-bold h-12 bg-slate-50 border-transparent focus-visible:bg-white focus-visible:border-amber-400 focus-visible:ring-amber-400/20 tabular-nums placeholder:text-transparent"
+                  placeholder="0"
+                />
+              </div>
+            </div>
 
-          <div className="space-y-2">
-            <Label>Socia *</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {partners.map((partner) => {
-                const visual = getPartnerVisual(partner.name);
-                const isSelected = ownerId === partner.id;
+            {/* Socia Owners (Pills) */}
+            <div>
+              <Label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 block">Dueña de la Prenda</Label>
+              <div className="flex flex-wrap gap-2">
+                {partners.map((partner) => {
+                  const visual = getPartnerVisual(partner.name);
+                  const isSelected = ownerId === partner.id;
 
-                return (
-                  <button
-                    key={partner.id}
-                    type="button"
-                    onClick={() => setOwnerId(partner.id)}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all",
-                      isSelected
-                        ? "shadow-sm"
-                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    )}
-                    style={
-                      isSelected
-                        ? {
-                            borderColor: visual.softBorder,
-                            backgroundColor: visual.softBackground,
-                            color: visual.softText,
-                          }
-                        : undefined
-                    }
-                  >
-                    <span
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
-                      style={{ backgroundColor: visual.accent }}
+                  return (
+                    <button
+                      key={partner.id}
+                      type="button"
+                      onClick={() => setOwnerId(partner.id)}
+                      className={cn(
+                        "rounded-full px-4 py-2 text-sm font-semibold transition-all border outline-none focus-visible:ring-2 focus-visible:ring-offset-1 select-none flex items-center gap-2",
+                        isSelected
+                          ? "shadow-sm"
+                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:border-slate-300"
+                      )}
+                      style={
+                        isSelected
+                          ? {
+                              borderColor: visual.softBorder,
+                              backgroundColor: visual.softBackground,
+                              color: visual.softText,
+                            }
+                          : undefined
+                      }
                     >
-                      {getPartnerInitial(partner.display_name)}
-                    </span>
-                    <span className="font-medium">{partner.display_name}</span>
-                  </button>
-                );
-              })}
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: visual.accent }}
+                      />
+                      {partner.display_name}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+
+            {/* Progressive Disclosure: Precios por Mayor */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowWholesale(!showWholesale)}
+                className="text-sm font-semibold text-indigo-600 hover:text-indigo-700 select-none flex items-center transition-opacity"
+              >
+                {showWholesale ? "Ocultar precios extras" : "+ Añadir precios al por mayor"}
+              </button>
+
+              {showWholesale && (
+                <div className="mt-4 grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div>
+                    <Label htmlFor="field-x3" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">X3 ($)</Label>
+                    <Input
+                      id="field-x3"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={salePriceX3}
+                      onChange={(e) => setSalePriceX3(e.target.value)}
+                      className="h-10 text-sm font-mono bg-slate-50 border-transparent focus-visible:bg-white placeholder:text-transparent"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="field-x6" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">X6 ($)</Label>
+                    <Input
+                      id="field-x6"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={salePriceX6}
+                      onChange={(e) => setSalePriceX6(e.target.value)}
+                      className="h-10 text-sm font-mono bg-slate-50 border-transparent focus-visible:bg-white placeholder:text-transparent"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="field-x12" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">X12 ($)</Label>
+                    <Input
+                      id="field-x12"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={salePriceX12}
+                      onChange={(e) => setSalePriceX12(e.target.value)}
+                      className="h-10 text-sm font-mono bg-slate-50 border-transparent focus-visible:bg-white placeholder:text-transparent"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="space-y-2">
-              <Label htmlFor="prod-sale">Precio venta ($) *</Label>
-              <Input
-                id="prod-sale"
-                type="number"
-                step="0.01"
-                min="0"
-                value={salePrice}
-                onChange={(event) => setSalePrice(event.target.value)}
-                placeholder="0.00"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prod-sale-x3">PVP x3</Label>
-              <Input
-                id="prod-sale-x3"
-                type="number"
-                step="0.01"
-                min="0"
-                value={salePriceX3}
-                onChange={(event) => setSalePriceX3(event.target.value)}
-                placeholder="Opcional"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prod-sale-x6">PVP x6</Label>
-              <Input
-                id="prod-sale-x6"
-                type="number"
-                step="0.01"
-                min="0"
-                value={salePriceX6}
-                onChange={(event) => setSalePriceX6(event.target.value)}
-                placeholder="Opcional"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prod-sale-x12">PVP x12</Label>
-              <Input
-                id="prod-sale-x12"
-                type="number"
-                step="0.01"
-                min="0"
-                value={salePriceX12}
-                onChange={(event) => setSalePriceX12(event.target.value)}
-                placeholder="Opcional"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prod-stock">Stock actual</Label>
-              <Input
-                id="prod-stock"
-                type="number"
-                value={stock}
-                onChange={(event) => setStock(event.target.value)}
-                placeholder="0"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prod-minstock">Minimo alerta</Label>
-              <Input
-                id="prod-minstock"
-                type="number"
-                value={minStock}
-                onChange={(event) => setMinStock(event.target.value)}
-                placeholder="2"
-                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
-              />
-            </div>
+          {/* Footer Clean */}
+          <div className="mt-auto border-t border-slate-100 bg-slate-50/50 p-6 flex items-center justify-between">
+            <Button
+              variant="ghost"
+              className="text-slate-400 hover:text-slate-600 font-semibold"
+              onClick={() => {
+                resetForm();
+                setOpen(false);
+              }}
+            >
+              Cerrar
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+              className="px-8 bg-slate-900 border-0 text-white font-bold shadow-lg shadow-slate-900/20 hover:bg-slate-800 hover:-translate-y-0.5 transition-all duration-200"
+            >
+              {isSubmitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isEditing ? "Actualizar" : "Guardar Prenda"}
+            </Button>
           </div>
         </div>
-
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              resetForm();
-              setOpen(false);
-            }}
-          >
-            Cancelar
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={isSubmitting}
-            className="border-0 bg-slate-900 text-white shadow-md shadow-slate-900/10 hover:bg-slate-800"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Guardando...
-              </>
-            ) : (
-              <>
-                <Save className="mr-2 h-4 w-4" />
-                {isEditing ? "Guardar cambios" : "Crear prenda"}
-              </>
-            )}
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

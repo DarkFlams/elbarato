@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, RefreshCw, Search, Tags } from "lucide-react";
+import { ChevronDown, Loader2, RefreshCw, Search, Tags } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+} from "@/components/ui/dialog";
 import {
   getCatalogProductCounts,
   saveCatalogProduct,
@@ -25,10 +30,10 @@ interface PriceListTableProps {
   refreshTrigger?: number;
 }
 
-interface EditingCellState {
+interface PriceEditFocus {
   productId: string;
   field: ProductPriceField;
-  value: string;
+  product: ProductWithOwner;
 }
 
 interface PriceListViewState {
@@ -148,8 +153,14 @@ export function PriceListTable({
   const [totalCount, setTotalCount] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [viewStateRestored, setViewStateRestored] = useState(false);
-  const [editingCell, setEditingCell] = useState<EditingCellState | null>(null);
-  const [savingCellKey, setSavingCellKey] = useState<string | null>(null);
+  const [editingPriceContext, setEditingPriceContext] = useState<PriceEditFocus | null>(null);
+  const [isSavingPrices, setIsSavingPrices] = useState(false);
+  const [priceFormValues, setPriceFormValues] = useState<Record<ProductPriceField, string>>({
+    sale_price: "",
+    sale_price_x3: "",
+    sale_price_x6: "",
+    sale_price_x12: "",
+  });
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentOffsetRef = useRef(0);
@@ -352,10 +363,6 @@ export function PriceListTable({
   };
 
   const hasActiveFilters = Boolean(searchQuery || filterOwner);
-  const visibleStockTotal = products.reduce(
-    (sum, product) => sum + Number(product.stock || 0),
-    0
-  );
 
   const handleStartEdit = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -363,36 +370,37 @@ export function PriceListTable({
     field: ProductPriceField
   ) => {
     event.stopPropagation();
-    setEditingCell({
-      productId: product.id,
-      field,
-      value: getProductPriceFieldValue(product, field)?.toString() ?? "",
+    setPriceFormValues({
+      sale_price: getProductPriceFieldValue(product, "sale_price")?.toString() ?? "",
+      sale_price_x3: getProductPriceFieldValue(product, "sale_price_x3")?.toString() ?? "",
+      sale_price_x6: getProductPriceFieldValue(product, "sale_price_x6")?.toString() ?? "",
+      sale_price_x12: getProductPriceFieldValue(product, "sale_price_x12")?.toString() ?? "",
     });
+    setEditingPriceContext({ productId: product.id, field, product });
+    
+    // Auto focus the correct input field after a micro-delay for the dialog to open
+    setTimeout(() => {
+      document.getElementById(`edit-field-${field}`)?.focus();
+    }, 50);
   };
 
-  const handleCommitEdit = async (product: ProductWithOwner) => {
-    if (!editingCell || editingCell.productId !== product.id) return;
-
-    const cellKey = getPriceCellKey(editingCell.productId, editingCell.field);
-    if (savingCellKey === cellKey) return;
+  const handleCommitPrices = async () => {
+    if (!editingPriceContext) return;
+    setIsSavingPrices(true);
+    
+    const { product } = editingPriceContext;
 
     try {
-      const parsedValue = parseEditablePrice(editingCell.value, editingCell.field);
-      const currentValue = getProductPriceFieldValue(product, editingCell.field) ?? null;
-
-      if (currentValue === parsedValue) {
-        setEditingCell(null);
-        return;
-      }
-
-      setSavingCellKey(cellKey);
+      const parsedSalePrice = parseEditablePrice(priceFormValues.sale_price, "sale_price");
+      const parsedSalePriceX3 = priceFormValues.sale_price_x3 ? parseEditablePrice(priceFormValues.sale_price_x3, "sale_price_x3") : null;
+      const parsedSalePriceX6 = priceFormValues.sale_price_x6 ? parseEditablePrice(priceFormValues.sale_price_x6, "sale_price_x6") : null;
+      const parsedSalePriceX12 = priceFormValues.sale_price_x12 ? parseEditablePrice(priceFormValues.sale_price_x12, "sale_price_x12") : null;
 
       const nextPrices: Record<ProductPriceField, number | null> = {
-        sale_price: product.sale_price,
-        sale_price_x3: product.sale_price_x3,
-        sale_price_x6: product.sale_price_x6,
-        sale_price_x12: product.sale_price_x12,
-        [editingCell.field]: parsedValue,
+        sale_price: parsedSalePrice ?? product.sale_price,
+        sale_price_x3: parsedSalePriceX3,
+        sale_price_x6: parsedSalePriceX6,
+        sale_price_x12: parsedSalePriceX12,
       };
 
       await saveProductPrices(product, nextPrices);
@@ -412,12 +420,19 @@ export function PriceListTable({
       );
 
       toast.success(`Precios actualizados para ${product.name}`);
-      setEditingCell(null);
+      setEditingPriceContext(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error al guardar precio";
       toast.error(message);
     } finally {
-      setSavingCellKey(null);
+      setIsSavingPrices(false);
+    }
+  };
+  
+  const handleDialogKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleCommitPrices();
     }
   };
 
@@ -509,7 +524,7 @@ export function PriceListTable({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {isLoading ? (
           <div className="flex flex-1 flex-col items-center justify-center text-slate-400">
             <RefreshCw className="mb-4 h-8 w-8 animate-spin text-slate-300" />
@@ -529,7 +544,7 @@ export function PriceListTable({
           </div>
         ) : (
           <>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="flex-1 min-h-0">
               <table className="w-full whitespace-nowrap text-left text-sm">
                 <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 shadow-sm">
                   <tr>
@@ -568,49 +583,12 @@ export function PriceListTable({
                       field: ProductPriceField,
                       title: string
                     ) => {
-                      const cellKey = getPriceCellKey(product.id, field);
-                      const isEditing =
-                        editingCell?.productId === product.id &&
-                        editingCell.field === field;
-                      const isSaving = savingCellKey === cellKey;
-
-                      if (isEditing) {
-                        return (
-                          <Input
-                            autoFocus
-                            value={editingCell.value}
-                            onChange={(event) =>
-                              setEditingCell((current) =>
-                                current && current.productId === product.id && current.field === field
-                                  ? { ...current, value: event.target.value }
-                                  : current
-                              )
-                            }
-                            onBlur={() => {
-                              void handleCommitEdit(product);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                event.currentTarget.blur();
-                              }
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                setEditingCell(null);
-                              }
-                            }}
-                            disabled={isSaving}
-                            className="h-7 border-slate-300 bg-white px-2 py-1 text-right font-mono text-[12px] font-semibold"
-                          />
-                        );
-                      }
-
                       return (
                         <button
                           type="button"
                           title={title}
                           onClick={(event) => handleStartEdit(event, product, field)}
-                          className="inline-flex min-w-[76px] justify-end rounded px-1 py-0.5 transition-colors hover:bg-indigo-50"
+                          className="inline-flex min-w-[76px] cursor-pointer justify-end rounded px-1 py-0.5 transition-colors hover:bg-indigo-50"
                         >
                           <span className="font-mono text-[12px] font-bold tabular-nums text-slate-900">
                             {formatPriceValue(getProductPriceFieldValue(product, field))}
@@ -677,14 +655,14 @@ export function PriceListTable({
               </table>
             </ScrollArea>
 
-            <div className="mt-auto flex shrink-0 items-center gap-4 border-t border-slate-200 bg-slate-50 px-6 py-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+            <div className="mt-auto flex shrink-0 items-center gap-3 border-t border-slate-200 bg-slate-50 px-4 py-2.5 shadow-[0_-2px_4px_-2px_rgba(0,0,0,0.03)]">
               {hasMore ? (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={loadMore}
                   disabled={isLoadingMore}
-                  className="gap-2 text-slate-600"
+                  className="h-8 gap-1.5 px-3 text-xs text-slate-600"
                 >
                   {isLoadingMore ? (
                     <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -697,20 +675,102 @@ export function PriceListTable({
                 <div />
               )}
 
-              <div className="ml-auto flex items-center gap-6">
-                <span className="text-sm font-semibold uppercase tracking-wide text-slate-600">
+              <div className="ml-auto flex items-center">
+                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
                   {hasMore
                     ? `Cargados (${products.length} de ${totalCount} productos)`
                     : `Total (${products.length} productos)`}
-                </span>
-                <span className="font-mono text-xl font-bold tabular-nums text-slate-900">
-                  {visibleStockTotal} und.
                 </span>
               </div>
             </div>
           </>
         )}
       </div>
+
+      {/* Edit Prices Dialog (Ventanita) */}
+      <Dialog open={!!editingPriceContext} onOpenChange={(open) => !open && setEditingPriceContext(null)}>
+        <DialogContent className="sm:max-w-[400px] rounded-2xl p-0 overflow-hidden border-0 shadow-2xl bg-white">
+          <div className="bg-slate-50 px-5 pt-6 pb-5 border-b border-slate-100 flex flex-col gap-1">
+            <h3 className="text-lg font-bold text-slate-900 leading-tight">
+              {editingPriceContext?.product.name}
+            </h3>
+            <p className="text-xs font-semibold text-slate-500 font-mono">
+              SKU: {editingPriceContext?.product.sku || editingPriceContext?.product.barcode}
+            </p>
+          </div>
+          
+          <div className="px-5 py-5 space-y-4" onKeyDown={handleDialogKeyDown}>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="edit-field-sale_price" className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1.5 block">PVP Normal ($)</Label>
+                <Input
+                  id="edit-field-sale_price"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={priceFormValues.sale_price}
+                  onChange={(e) => setPriceFormValues(prev => ({...prev, sale_price: e.target.value}))}
+                  className="font-mono font-bold text-sm bg-indigo-50 border-transparent focus-visible:bg-white focus-visible:ring-indigo-500/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-field-sale_price_x3" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">PVP X3 ($)</Label>
+                <Input
+                  id="edit-field-sale_price_x3"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={priceFormValues.sale_price_x3}
+                  onChange={(e) => setPriceFormValues(prev => ({...prev, sale_price_x3: e.target.value}))}
+                  className="font-mono font-bold text-sm bg-slate-50 border-transparent focus-visible:bg-white focus-visible:ring-slate-400/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-field-sale_price_x6" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">PVP X6 ($)</Label>
+                <Input
+                  id="edit-field-sale_price_x6"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={priceFormValues.sale_price_x6}
+                  onChange={(e) => setPriceFormValues(prev => ({...prev, sale_price_x6: e.target.value}))}
+                  className="font-mono font-bold text-sm bg-slate-50 border-transparent focus-visible:bg-white focus-visible:ring-slate-400/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-field-sale_price_x12" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">PVP X12 ($)</Label>
+                <Input
+                  id="edit-field-sale_price_x12"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={priceFormValues.sale_price_x12}
+                  onChange={(e) => setPriceFormValues(prev => ({...prev, sale_price_x12: e.target.value}))}
+                  className="font-mono font-bold text-sm bg-slate-50 border-transparent focus-visible:bg-white focus-visible:ring-slate-400/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+            </div>
+          </div>
+          
+          <div className="mt-auto border-t border-slate-100 bg-slate-50/50 p-4 flex items-center justify-between">
+            <Button
+              variant="ghost"
+              className="text-slate-400 hover:text-slate-600 font-semibold"
+              onClick={() => setEditingPriceContext(null)}
+            >
+              Cerrar
+            </Button>
+            <Button
+              onClick={handleCommitPrices}
+              disabled={isSavingPrices}
+              className="px-6 bg-slate-900 border-0 text-white font-bold shadow-md shadow-slate-900/10 hover:bg-slate-800"
+            >
+              {isSavingPrices ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Guardar Precios
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

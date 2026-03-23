@@ -33,6 +33,8 @@ export interface LocalSyncQueueStats {
   failed: number;
 }
 
+export type SyncQueueStatusFilter = "all" | "pending" | "failed";
+
 export function isDesktopSyncQueueEnabled() {
   return isTauriRuntime();
 }
@@ -95,6 +97,35 @@ export async function listSyncQueueLocalFirst(): Promise<LocalSyncQueueItem[]> {
       createdAt: item.created_at,
       updatedAt: item.last_attempt_at ?? item.created_at,
     }));
+  }
+}
+
+export async function listSyncQueuePreviewLocalFirst(options?: {
+  limit?: number;
+  status?: SyncQueueStatusFilter;
+}): Promise<LocalSyncQueueItem[]> {
+  const limit = Math.max(1, Math.trunc(options?.limit ?? 200));
+  const status = options?.status ?? "all";
+
+  if (!isTauriRuntime()) {
+    const items = await listSyncQueueLocalFirst();
+    const filtered =
+      status === "all" ? items : items.filter((item) => item.status === status);
+    return filtered.slice(0, limit);
+  }
+
+  try {
+    return await invoke<LocalSyncQueueItem[]>("list_local_sync_queue_preview", {
+      limit,
+      status,
+    });
+  } catch (error) {
+    if (!isMissingTauriCommandError(error)) throw error;
+
+    const items = await listSyncQueueLocalFirst();
+    const filtered =
+      status === "all" ? items : items.filter((item) => item.status === status);
+    return filtered.slice(0, limit);
   }
 }
 

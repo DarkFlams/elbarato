@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS sales (
   synced_at TEXT,
   FOREIGN KEY(cash_session_local_id) REFERENCES cash_sessions(local_id)
 );
+CREATE INDEX IF NOT EXISTS idx_sales_cash_session_local_id ON sales(cash_session_local_id);
 
 CREATE TABLE IF NOT EXISTS sale_items (
   local_id TEXT PRIMARY KEY,
@@ -134,6 +135,8 @@ CREATE TABLE IF NOT EXISTS sale_items (
   synced_at TEXT,
   FOREIGN KEY(sale_local_id) REFERENCES sales(local_id)
 );
+CREATE INDEX IF NOT EXISTS idx_sale_items_sale_local_id ON sale_items(sale_local_id);
+CREATE INDEX IF NOT EXISTS idx_sale_items_product_local_id ON sale_items(product_local_id);
 
 CREATE TABLE IF NOT EXISTS expenses (
   local_id TEXT PRIMARY KEY,
@@ -150,6 +153,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   synced_at TEXT,
   FOREIGN KEY(cash_session_local_id) REFERENCES cash_sessions(local_id)
 );
+CREATE INDEX IF NOT EXISTS idx_expenses_cash_session_local_id ON expenses(cash_session_local_id);
 
 CREATE TABLE IF NOT EXISTS expense_allocations (
   local_id TEXT PRIMARY KEY,
@@ -163,6 +167,7 @@ CREATE TABLE IF NOT EXISTS expense_allocations (
   synced_at TEXT,
   FOREIGN KEY(expense_local_id) REFERENCES expenses(local_id)
 );
+CREATE INDEX IF NOT EXISTS idx_expense_allocations_expense_local_id ON expense_allocations(expense_local_id);
 
 CREATE TABLE IF NOT EXISTS inventory_movements (
   local_id TEXT PRIMARY KEY,
@@ -178,6 +183,9 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   synced_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_product_id ON inventory_movements(product_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_reference_reason ON inventory_movements(reference_local_id, reason);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_pending_lookup ON inventory_movements(product_id, sync_status, reason, quantity_change, updated_at);
 
 CREATE TABLE IF NOT EXISTS sync_queue (
   local_id TEXT PRIMARY KEY,
@@ -196,6 +204,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_queue_entity_local ON sync_queue(entity_name, entity_local_id);
 
 CREATE TABLE IF NOT EXISTS sync_journal (
   local_id TEXT PRIMARY KEY,
@@ -754,8 +763,16 @@ fn backup_and_reset_incompatible_database(db_path: &PathBuf) -> Result<(), Strin
 }
 
 fn open_connection(db_path: &PathBuf) -> Result<Connection, String> {
-    Connection::open(db_path)
-        .map_err(|error| format!("No se pudo abrir base local SQLite: {error}"))
+    let connection =
+        Connection::open(db_path).map_err(|error| format!("No se pudo abrir base local SQLite: {error}"))?;
+
+    // Evita errores "database is locked" cuando hay varias escrituras cortas
+    // disparadas por el motor de sincronizacion.
+    connection
+        .execute_batch("PRAGMA busy_timeout = 5000;")
+        .map_err(|error| format!("No se pudo configurar busy_timeout SQLite: {error}"))?;
+
+    Ok(connection)
 }
 
 fn connection_from_state(state: &DatabaseState) -> Result<Connection, String> {
@@ -2956,6 +2973,113 @@ pub fn list_local_sync_queue(
     let mut items = Vec::new();
     for row in rows {
         items.push(row.map_err(|error| format!("No se pudo mapear cola local: {error}"))?);
+    }
+
+    Ok(items)
+}
+
+#[tauri::command]
+pub fn list_local_sync_queue_preview(
+    state: State<'_, DatabaseState>,
+    limit: Option<i64>,
+    status: Option<String>,
+) -> Result<Vec<LocalSyncQueueItem>, String> {
+    let connection = connection_from_state(&state)?;
+    let normalized_limit = limit.unwrap_or(200).clamp(1, 1000);
+    let normalized_status = status
+        .unwrap_or_else(|| "all".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    let sql = match normalized_status.as_str() {
+        "pending" => {
+            "SELECT
+         local_id,
+         entity_name,
+         entity_local_id,
+         entity_remote_id,
+         operation_type,
+         payload_json,
+         idempotency_key,
+         status,
+         attempts,
+         next_retry_at,
+         last_error,
+         created_at,
+         updated_at
+       FROM sync_queue
+       WHERE status = 'pending'
+       ORDER BY created_at DESC
+       LIMIT ?1"
+        }
+        "failed" => {
+            "SELECT
+         local_id,
+         entity_name,
+         entity_local_id,
+         entity_remote_id,
+         operation_type,
+         payload_json,
+         idempotency_key,
+         status,
+         attempts,
+         next_retry_at,
+         last_error,
+         created_at,
+         updated_at
+       FROM sync_queue
+       WHERE status = 'failed'
+       ORDER BY created_at DESC
+       LIMIT ?1"
+        }
+        _ => {
+            "SELECT
+         local_id,
+         entity_name,
+         entity_local_id,
+         entity_remote_id,
+         operation_type,
+         payload_json,
+         idempotency_key,
+         status,
+         attempts,
+         next_retry_at,
+         last_error,
+         created_at,
+         updated_at
+       FROM sync_queue
+       ORDER BY created_at DESC
+       LIMIT ?1"
+        }
+    };
+
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| format!("No se pudo preparar preview de cola local: {error}"))?;
+
+    let rows = statement
+        .query_map(params![normalized_limit], |row| {
+            Ok(LocalSyncQueueItem {
+                id: row.get::<_, String>(0)?,
+                entity_name: row.get::<_, String>(1)?,
+                entity_local_id: row.get::<_, String>(2)?,
+                entity_remote_id: row.get::<_, Option<String>>(3)?,
+                operation_type: row.get::<_, String>(4)?,
+                payload_json: row.get::<_, String>(5)?,
+                idempotency_key: row.get::<_, Option<String>>(6)?,
+                status: row.get::<_, String>(7)?,
+                attempts: row.get::<_, i64>(8)?,
+                next_retry_at: row.get::<_, Option<String>>(9)?,
+                last_error: row.get::<_, Option<String>>(10)?,
+                created_at: row.get::<_, String>(11)?,
+                updated_at: row.get::<_, String>(12)?,
+            })
+        })
+        .map_err(|error| format!("No se pudo leer preview de cola local: {error}"))?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|error| format!("No se pudo mapear preview de cola local: {error}"))?);
     }
 
     Ok(items)

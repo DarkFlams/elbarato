@@ -15,6 +15,7 @@ import {
   findCatalogProductByBarcode,
   searchCatalogProductsByIntent,
 } from "@/lib/local/catalog";
+import { getPartnerVisual } from "@/components/inventory/inventory-ui";
 import { Input } from "@/components/ui/input";
 import type { ProductWithOwner } from "@/types/database";
 
@@ -44,13 +45,21 @@ function shouldTryExactCodeLookup(value: string) {
   return /\d/.test(searchTerm);
 }
 
+function formatStockLabel(stock: number) {
+  if (stock <= 0) return "0";
+  if (Number.isInteger(stock)) return String(stock);
+  return stock.toFixed(2);
+}
+
 export function ProductSearch() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductWithOwner[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const { addItem, selectedPriceTier } = useCart();
 
   const searchProducts = async (
@@ -68,34 +77,53 @@ export function ProductSearch() {
     });
   };
 
+  const resetSearch = () => {
+    setQuery("");
+    setResults([]);
+    setIsOpen(false);
+    setSelectedIndex(0);
+  };
+
+  const focusResult = (index: number) => {
+    window.requestAnimationFrame(() => {
+      resultRefs.current[index]?.scrollIntoView({ block: "nearest" });
+    });
+  };
+
   useEffect(() => {
     if (query.length < 2) {
       setResults([]);
       setIsOpen(false);
+      setSelectedIndex(0);
       return;
     }
 
     const timer = window.setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data = await searchProducts(query, 8);
-
+        const data = await searchProducts(query, 24);
         setResults(data);
         setIsOpen(true);
+        setSelectedIndex(0);
       } catch (error) {
         console.error("[ProductSearch] search error:", error);
       } finally {
         setIsSearching(false);
       }
-    }, 300);
+    }, 220);
 
     return () => window.clearTimeout(timer);
   }, [query]);
 
   useEffect(() => {
+    resultRefs.current = resultRefs.current.slice(0, results.length);
+  }, [results]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) {
         setIsOpen(false);
+        setSelectedIndex(0);
       }
     };
 
@@ -133,55 +161,88 @@ export function ProductSearch() {
       });
     }
 
-    setQuery("");
-    setResults([]);
-    setIsOpen(false);
+    resetSearch();
     inputRef.current?.blur();
   };
 
   const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
+    if (event.key === "ArrowDown" && results.length > 0) {
       event.preventDefault();
-      
-      const searchTerm = query.trim();
-      if (!searchTerm) return;
+      setIsOpen(true);
+      setSelectedIndex((current) => {
+        const nextIndex = Math.min(current + 1, results.length - 1);
+        focusResult(nextIndex);
+        return nextIndex;
+      });
+      return;
+    }
 
-      const exactResult = findExactCodeMatch(results, searchTerm);
-      if (exactResult) {
-        handleSelect(exactResult);
-        return;
-      }
+    if (event.key === "ArrowUp" && results.length > 0) {
+      event.preventDefault();
+      setSelectedIndex((current) => {
+        const nextIndex = Math.max(current - 1, 0);
+        focusResult(nextIndex);
+        return nextIndex;
+      });
+      return;
+    }
 
-      if (shouldTryExactCodeLookup(searchTerm)) {
-        try {
-          const exactByCode = await findCatalogProductByBarcode(searchTerm);
-          if (exactByCode) {
-            handleSelect(exactByCode);
-            return;
-          }
-        } catch (error) {
-          console.error("[ProductSearch] exact code lookup error:", error);
+    if (event.key === "Escape") {
+      setIsOpen(false);
+      setSelectedIndex(0);
+      return;
+    }
+
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+
+    const searchTerm = query.trim();
+    if (!searchTerm) return;
+
+    if (isOpen && results[selectedIndex]) {
+      handleSelect(results[selectedIndex]);
+      return;
+    }
+
+    const exactResult = findExactCodeMatch(results, searchTerm);
+    if (exactResult) {
+      handleSelect(exactResult);
+      return;
+    }
+
+    if (shouldTryExactCodeLookup(searchTerm)) {
+      try {
+        const exactByCode = await findCatalogProductByBarcode(searchTerm);
+        if (exactByCode) {
+          handleSelect(exactByCode);
+          return;
         }
+      } catch (error) {
+        console.error("[ProductSearch] exact code lookup error:", error);
       }
+    }
 
-      if (!isSearching && results.length > 0) {
-        handleSelect(results[0]);
+    if (!isSearching && results.length > 0) {
+      handleSelect(results[0]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const data = await searchProducts(searchTerm, 24);
+
+      if (data.length > 0) {
+        handleSelect(data[0]);
       } else {
-        setIsSearching(true);
-        try {
-          const data = await searchProducts(searchTerm, 8);
-          
-          if (data.length > 0) {
-            handleSelect(data[0]);
-          } else {
-            toast.error(`No se encontró ningún producto para: ${searchTerm}`);
-          }
-        } catch (error) {
-          console.error("[ProductSearch] instant search error:", error);
-        } finally {
-          setIsSearching(false);
-        }
+        toast.error(`No se encontro ningun producto para: ${searchTerm}`);
       }
+    } catch (error) {
+      console.error("[ProductSearch] instant search error:", error);
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -197,6 +258,11 @@ export function ProductSearch() {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
+          onFocus={() => {
+            if (query.trim().length >= 2 && results.length > 0) {
+              setIsOpen(true);
+            }
+          }}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="none"
@@ -205,13 +271,9 @@ export function ProductSearch() {
           className="h-9 border-slate-200 bg-white pl-9 pr-8 text-sm shadow-sm transition-colors focus:border-indigo-500 focus:ring-indigo-500/20"
         />
 
-        {query && (
+        {query && !isSearching && (
           <button
-            onClick={() => {
-              setQuery("");
-              setResults([]);
-              setIsOpen(false);
-            }}
+            onClick={resetSearch}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-900"
           >
             <X className="h-4 w-4" />
@@ -224,48 +286,62 @@ export function ProductSearch() {
       </div>
 
       {isOpen && results.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-          {results.map((product) => (
-            (() => {
-              const tierPrice = getPriceForTier(product, selectedPriceTier);
-              const tierUnavailable =
-                tierPrice === null || tierPrice === undefined || tierPrice <= 0;
+        <div className="absolute z-50 mt-1 max-h-[300px] w-full overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+          <div className="sticky top-0 z-10 grid grid-cols-[74px_minmax(0,1fr)_74px_90px] items-center gap-3 border-b border-slate-200 bg-slate-50 pl-5 pr-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            <span className="border-r border-slate-200 pr-3">PVP</span>
+            <span className="border-r border-slate-200 pr-3">Producto</span>
+            <span className="border-r border-slate-200 pr-3 text-right">Stock</span>
+            <span className="text-right">Codigo</span>
+          </div>
+          {results.map((product, index) => {
+            const tierPrice = getPriceForTier(product, selectedPriceTier);
+            const tierUnavailable =
+              tierPrice === null || tierPrice === undefined || tierPrice <= 0;
+            const isSelected = index === selectedIndex;
+            const visual = getPartnerVisual(product.owner.name);
 
-              return (
-                <button
-                  key={product.id}
-                  onClick={() => handleSelect(product)}
-                  className="flex w-full items-center border-b border-slate-100 px-3 py-2 text-left transition-colors hover:bg-slate-50 last:border-0"
+            return (
+              <button
+                key={product.id}
+                ref={(element) => {
+                  resultRefs.current[index] = element;
+                }}
+                onClick={() => handleSelect(product)}
+                onMouseEnter={() => setSelectedIndex(index)}
+                className={`relative grid w-full grid-cols-[74px_minmax(0,1fr)_74px_90px] items-center gap-3 border-b border-slate-100 pl-5 pr-3 py-1 text-left transition-colors last:border-0 ${
+                  isSelected ? "bg-slate-100" : "hover:bg-slate-50"
+                }`}
+              >
+                <div
+                  className="absolute bottom-1 left-0 top-1 w-0.5 rounded-r-md"
+                  style={{ backgroundColor: visual.accent }}
+                />
+                <div className="border-r border-slate-100 pr-3 font-mono text-[13px] font-semibold tabular-nums text-slate-900">
+                  {tierUnavailable ? "--" : tierPrice.toFixed(2)}
+                </div>
+
+                <div className="min-w-0 truncate border-r border-slate-100 pr-3 text-[13px] font-semibold leading-tight text-slate-900">
+                  {product.name}
+                </div>
+
+                <div
+                  className={`border-r border-slate-100 pr-3 text-right font-mono text-[13px] font-semibold tabular-nums ${
+                    product.stock <= 0
+                      ? "text-rose-600"
+                      : product.stock <= product.min_stock
+                      ? "text-amber-600"
+                      : "text-slate-900"
+                  }`}
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-900">{product.name}</p>
-                    <p className="text-xs text-slate-500">
-                      <span
-                        className="mr-1 inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: product.owner.color_hex }}
-                      />
-                      {product.owner.display_name} - {product.barcode}
-                      {product.stock <= 0 && (
-                        <span className="ml-2 text-red-400">Sin stock</span>
-                      )}
-                      {product.stock > 0 && product.stock <= product.min_stock && (
-                        <span className="ml-2 text-yellow-500">Stock: {product.stock}</span>
-                      )}
-                    </p>
-                  </div>
+                  {formatStockLabel(product.stock)}
+                </div>
 
-                  <div className="ml-3 text-right">
-                    <p className="font-mono text-sm font-semibold">
-                      {tierUnavailable ? "--" : `$${tierPrice.toFixed(2)}`}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {getTierLabel(selectedPriceTier)}
-                    </p>
-                  </div>
-                </button>
-              );
-            })()
-          ))}
+                <div className="truncate text-right font-mono text-[13px] font-semibold text-slate-700">
+                  {product.sku || product.barcode}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -277,4 +353,3 @@ export function ProductSearch() {
     </div>
   );
 }
-

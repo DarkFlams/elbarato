@@ -47,8 +47,7 @@ type MovementFilter =
   | "restock"
   | "manual_adjustment"
   | "return"
-  | "initial_stock"
-  | "old_stock";
+  | "initial_stock";
 
 const FILTERS: { value: MovementFilter; label: string }[] = [
   { value: "all", label: "Todos" },
@@ -56,8 +55,7 @@ const FILTERS: { value: MovementFilter; label: string }[] = [
   { value: "restock", label: "Altas" },
   { value: "manual_adjustment", label: "Bajas/Ajustes" },
   { value: "return", label: "Devoluciones" },
-  { value: "initial_stock", label: "Inicial" },
-  { value: "old_stock", label: "Ropa Vieja" },
+  { value: "initial_stock", label: "Stock inicial" },
 ];
 
 const REASON_LABEL: Record<string, string> = {

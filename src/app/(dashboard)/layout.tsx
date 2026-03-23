@@ -37,32 +37,40 @@ import {
   Printer,
   Smartphone,
   Tags,
+  PanelLeft,
+  PanelLeftClose,
 } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
 import { OfflineSyncIndicator } from "@/components/offline/offline-sync-indicator";
 import { LocalCatalogGate } from "@/components/offline/local-catalog-gate";
 import { isAuthBypassEnabled } from "@/lib/auth-mode";
+import { useCartStore } from "@/hooks/use-cart";
 
 const navigation = [
   {
-    label: "Operaciones",
+    label: "Caja",
     items: [
-      { title: "Punto de Venta", href: "/caja", icon: ScanBarcode },
-      { title: "Ventas", href: "/ventas", icon: ShoppingBag },
-      { title: "Gastos", href: "/gastos", icon: Wallet },
-      { title: "Offline", href: "/offline", icon: CloudOff },
+      { title: "Terminal POS", href: "/caja", icon: ScanBarcode },
+      { title: "Historial de Tickets", href: "/ventas", icon: ShoppingBag },
+      { title: "Gastos Diarios", href: "/gastos", icon: Wallet },
     ],
   },
   {
-    label: "Gestion",
+    label: "Catálogo",
     items: [
       { title: "Inventario", href: "/inventario", icon: Package },
       { title: "Lista de Precios", href: "/precios", icon: Tags },
       { title: "Altas y Bajas", href: "/inventario/movimientos", icon: ArrowUpDown },
-      { title: "Stock Movil", href: "/stock-movil", icon: Smartphone },
-      { title: "Migracion", href: "/inventario/migracion", icon: Database },
       { title: "Reportes", href: "/reportes", icon: BarChart3 },
-      { title: "Impresion", href: "/impresion", icon: Printer },
+    ],
+  },
+  {
+    label: "Sistema",
+    items: [
+      { title: "Impresión", href: "/impresion", icon: Printer },
+      { title: "Stock Móvil", href: "/stock-movil", icon: Smartphone },
+      { title: "Modo Offline", href: "/offline", icon: CloudOff },
+      { title: "Base de Datos", href: "/inventario/migracion", icon: Database },
       { title: "Actualizaciones", href: "/actualizaciones", icon: CloudDownload },
     ],
   },
@@ -74,6 +82,7 @@ function AppSidebar() {
   const supabase = createClient();
   const { state, toggleSidebar } = useSidebar();
   const bypassAuth = isAuthBypassEnabled();
+  const openPosTab = useCartStore((store) => store.openTab);
 
   const handleLogout = async () => {
     if (bypassAuth) {
@@ -88,59 +97,60 @@ function AppSidebar() {
   };
 
   const handleNavigate = (href: string) => {
-    if (pathname === href) return;
+    if (pathname === href) {
+      if (href === "/caja") {
+        openPosTab();
+      }
+      return;
+    }
+
     router.push(href);
   };
 
   return (
-    <Sidebar collapsible="icon" className="relative border-r border-sidebar-border">
-      <Button
-        onClick={toggleSidebar}
-        variant="outline"
-        size="icon"
-        className="absolute -right-3 top-1/2 z-50 flex h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-md transition-transform hover:scale-110 hover:text-indigo-600 focus:outline-none"
-      >
-        {state === "expanded" ? (
-          <ChevronLeft className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5" />
-        )}
-        <span className="sr-only">Toggle Sidebar</span>
-      </Button>
-
-      <SidebarHeader className="p-2.5">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-md shadow-indigo-600/20">
-            <ShoppingBag className="h-4.5 w-4.5 text-white" />
+    <Sidebar collapsible="icon" className="group/sidebar relative border-r border-slate-200 bg-white shadow-[4px_0_24px_-12px_rgba(0,0,0,0.06)]">
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2 border-b border-transparent transition-all">
+        <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-slate-800 to-slate-930 shadow-md ring-1 ring-slate-900/10 transition-all">
+            <span className="font-sans font-bold text-[16px] group-data-[collapsible=icon]:text-[14px] text-white tracking-tighter leading-none transition-all">D'</span>
           </div>
           <div className="flex flex-col flex-1 group-data-[collapsible=icon]:hidden overflow-hidden">
-            <span className="gradient-text truncate text-[13px] font-semibold">{APP_NAME}</span>
-            <span className="truncate text-[10px] text-muted-foreground">Control de Ventas</span>
+            <span className="truncate text-[14px] font-extrabold text-slate-900 tracking-tight leading-tight">
+              D'Lorens & El Barato
+            </span>
+            <span className="truncate text-[9px] font-semibold text-slate-500 uppercase tracking-widest mt-0.5">
+              Administración
+            </span>
           </div>
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
-        {navigation.map((group) => (
-          <SidebarGroup key={group.label}>
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">
+      <SidebarContent className="px-2 group-data-[collapsible=icon]:px-1.5 gap-0 overflow-y-auto hide-scrollbar pt-1">
+        {navigation.map((group, index) => (
+          <SidebarGroup key={group.label} className={index !== 0 ? "mt-3" : ""}>
+            <SidebarGroupLabel className="text-[10px] uppercase tracking-[0.12em] text-slate-400/80 font-bold mb-1 px-2 group-data-[collapsible=icon]:hidden transition-all duration-200">
               {group.label}
             </SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu className="gap-0.5">
                 {group.items.map((item) => {
                   const isActive = pathname === item.href;
                   return (
-                    <SidebarMenuItem key={item.href}>
+                    <SidebarMenuItem key={item.href} className="group-data-[collapsible=icon]:mb-0.5">
                       <SidebarMenuButton
                         type="button"
                         onClick={() => handleNavigate(item.href)}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="transition-all duration-200"
+                        className={`transition-all duration-200 rounded-md group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center h-8 px-2.5 relative overflow-hidden ${
+                          isActive 
+                            ? "bg-indigo-50/80 text-indigo-700 font-semibold shadow-sm ring-1 ring-indigo-500/20" 
+                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium"
+                        }`}
                       >
-                        <item.icon className="h-3.5 w-3.5" />
-                        <span>{item.title}</span>
+                        {isActive && <div className="absolute left-0 top-1 bottom-1 w-[3px] rounded-r-full bg-indigo-600 group-data-[collapsible=icon]:hidden" />}
+                        <item.icon className={`shrink-0 transition-colors ${isActive ? 'text-indigo-600 h-[16px] w-[16px]' : 'text-slate-400 h-[16px] w-[16px] group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:w-4 group-hover:text-slate-600'}`} />
+                        <span className="text-[12px] group-data-[collapsible=icon]:hidden transition-all duration-200 whitespace-nowrap overflow-hidden text-ellipsis w-full ml-1.5">{item.title}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
@@ -151,16 +161,33 @@ function AppSidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="p-1.5">
-        <SidebarMenu>
+      <SidebarFooter className="p-2 group-data-[collapsible=icon]:p-1.5 border-t border-slate-100 mt-1 mb-6 transition-all">
+        <SidebarMenu className="gap-0.5">
           <SidebarMenuItem>
             <SidebarMenuButton
-              onClick={handleLogout}
-              tooltip="Cerrar sesion"
-              className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+              type="button"
+              onClick={toggleSidebar}
+              tooltip={state === "expanded" ? "Ocultar menú" : "Expandir menú"}
+              className="text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition-all cursor-pointer rounded-md h-8 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center font-medium px-2.5"
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span>Cerrar Sesion</span>
+              {state === "expanded" ? (
+                <PanelLeftClose className="h-[16px] w-[16px] shrink-0 transition-colors group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:w-4" />
+              ) : (
+                <PanelLeft className="h-[16px] w-[16px] shrink-0 transition-colors group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:w-4" />
+              )}
+              <span className="text-[12px] group-data-[collapsible=icon]:hidden whitespace-nowrap overflow-hidden text-ellipsis w-full ml-1.5">Ocultar Menú</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <div className="h-px w-full bg-slate-100 my-1 group-data-[collapsible=icon]:hidden" />
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              type="button"
+              onClick={handleLogout}
+              tooltip="Cerrar sesión"
+              className="text-slate-500 hover:bg-rose-50 hover:text-rose-600 hover:ring-1 hover:ring-rose-500/20 transition-all cursor-pointer rounded-md h-8 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center font-medium px-2.5"
+            >
+              <LogOut className="h-[16px] w-[16px] shrink-0 transition-colors group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:w-4" />
+              <span className="text-[12px] group-data-[collapsible=icon]:hidden whitespace-nowrap overflow-hidden text-ellipsis w-full ml-1.5">Cerrar Sesión</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -183,7 +210,6 @@ function DashboardAuthGate({
 
   useEffect(() => {
     if (bypassAuth) {
-      setStatus("allowed");
       return;
     }
 
@@ -226,7 +252,7 @@ function DashboardAuthGate({
     };
   }, [bypassAuth, router, supabase]);
 
-  if (status === "allowed") {
+  if (bypassAuth || status === "allowed") {
     return <>{children}</>;
   }
 

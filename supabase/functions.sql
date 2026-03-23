@@ -1347,3 +1347,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public;
+
+-- Refresca el schema cache de PostgREST para que las RPC nuevas queden visibles
+-- inmediatamente despues de ejecutar este archivo en Supabase SQL Editor.
+NOTIFY pgrst, 'reload schema';

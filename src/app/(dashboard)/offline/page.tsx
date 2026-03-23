@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
   CloudOff,
   CloudUpload,
   Loader2,
@@ -17,19 +18,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { getLocalCatalogBootstrapState } from "@/lib/local/bootstrap";
 import {
   getSyncQueueStatsLocalFirst,
-  listSyncQueueLocalFirst,
+  listSyncQueuePreviewLocalFirst,
   removeSyncQueueItemLocalFirst,
   requeueAllFailedSyncQueueItemsLocalFirst,
   requeueSyncQueueItemLocalFirst,
   type LocalSyncQueueItem,
+  type SyncQueueStatusFilter,
 } from "@/lib/local/sync-queue";
+import { formatSyncErrorMessage } from "@/lib/local/sync-errors";
 import { useOfflineSync } from "@/hooks/use-offline-sync";
 import { formatEcuadorDateTime } from "@/lib/timezone-ecuador";
 
-async function readSortedOperations() {
-  const operations = await listSyncQueueLocalFirst();
-  return operations.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
+const OFFLINE_PREVIEW_STEP = 200;
+const OFFLINE_REFRESH_MS = 5000;
 
 function formatOperationType(operation: LocalSyncQueueItem) {
   if (operation.entityName === "sales") return "Venta";
@@ -110,6 +111,8 @@ function formatDateTime(value: string | null) {
 
 export default function OfflinePage() {
   const [operations, setOperations] = useState<LocalSyncQueueItem[]>([]);
+  const [statusFilter, setStatusFilter] = useState<SyncQueueStatusFilter>("all");
+  const [visibleCount, setVisibleCount] = useState(OFFLINE_PREVIEW_STEP);
   const [catalogState, setCatalogState] = useState<{
     ready: boolean;
     seeded: boolean;
@@ -121,31 +124,54 @@ export default function OfflinePage() {
   const { isOnline, isSyncing, runSync, syncSupported, pendingCount, failedCount, totalCount } =
     useOfflineSync();
 
+  const refreshOperations = useCallback(async () => {
+    const items = await listSyncQueuePreviewLocalFirst({
+      limit: visibleCount,
+      status: statusFilter,
+    });
+    setOperations(items);
+    return items;
+  }, [statusFilter, visibleCount]);
+
   useEffect(() => {
     let isCancelled = false;
 
     const load = async () => {
-      const [items, nextCatalogState] = await Promise.all([
-        readSortedOperations(),
-        getLocalCatalogBootstrapState(),
-      ]);
+      const nextCatalogState = await getLocalCatalogBootstrapState();
+      if (!isCancelled) setCatalogState(nextCatalogState);
+    };
+
+    void load();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const load = async () => {
+      const items = await listSyncQueuePreviewLocalFirst({
+        limit: visibleCount,
+        status: statusFilter,
+      });
 
       if (!isCancelled) {
         setOperations(items);
-        setCatalogState(nextCatalogState);
       }
     };
 
     void load();
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       void load();
-    }, 3000);
+    }, OFFLINE_REFRESH_MS);
 
     return () => {
       isCancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [statusFilter, visibleCount]);
 
   const handleSyncNow = async () => {
     if (!isOnline) {
@@ -157,7 +183,7 @@ export default function OfflinePage() {
     const before = totalCount;
     await runSync();
     const afterStats = await getSyncQueueStatsLocalFirst();
-    setOperations(await readSortedOperations());
+    await refreshOperations();
     setIsSyncingManual(false);
 
     const syncedCount = Math.max(0, before - afterStats.total);
@@ -185,8 +211,7 @@ export default function OfflinePage() {
     }
 
     await runSync();
-    const refreshed = await readSortedOperations();
-    setOperations(refreshed);
+    const refreshed = await refreshOperations();
     const stillExists = refreshed.find((op) => op.id === operationId);
     setActioningId(null);
 
@@ -197,7 +222,7 @@ export default function OfflinePage() {
 
     if (stillExists.status === "failed") {
       toast.error("La operacion sigue fallando.", {
-        description: stillExists.lastError ?? "Error desconocido",
+        description: formatSyncErrorMessage(stillExists.lastError),
       });
       return;
     }
@@ -224,11 +249,18 @@ export default function OfflinePage() {
 
   const handleRemove = async (operationId: string) => {
     await removeSyncQueueItemLocalFirst(operationId);
-    setOperations(await readSortedOperations());
+    await refreshOperations();
     toast.success("Operacion eliminada de la cola local.");
   };
 
   const hasOperations = operations.length > 0;
+  const filteredTotal =
+    statusFilter === "pending"
+      ? pendingCount
+      : statusFilter === "failed"
+      ? failedCount
+      : totalCount;
+  const hasMoreOperations = operations.length < filteredTotal;
 
   const headerStatus = useMemo(() => {
     if (!isOnline) return "Offline";
@@ -371,10 +403,48 @@ export default function OfflinePage() {
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-800">
-            Detalle de Operaciones
-          </h2>
-          <span className="text-xs text-slate-500">{operations.length} registro(s)</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">Detalle de Operaciones</h2>
+            <Button
+              type="button"
+              size="sm"
+              variant={statusFilter === "all" ? "default" : "outline"}
+              className="h-8"
+              onClick={() => {
+                setStatusFilter("all");
+                setVisibleCount(OFFLINE_PREVIEW_STEP);
+              }}
+            >
+              Todos
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={statusFilter === "failed" ? "default" : "outline"}
+              className="h-8"
+              onClick={() => {
+                setStatusFilter("failed");
+                setVisibleCount(OFFLINE_PREVIEW_STEP);
+              }}
+            >
+              Fallidos
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={statusFilter === "pending" ? "default" : "outline"}
+              className="h-8"
+              onClick={() => {
+                setStatusFilter("pending");
+                setVisibleCount(OFFLINE_PREVIEW_STEP);
+              }}
+            >
+              Pendientes
+            </Button>
+          </div>
+          <span className="text-xs text-slate-500">
+            Mostrando {operations.length} de {filteredTotal}
+          </span>
         </div>
 
         {!hasOperations ? (
@@ -388,94 +458,114 @@ export default function OfflinePage() {
             </p>
           </div>
         ) : (
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="divide-y divide-slate-100">
-              {operations.map((operation) => (
-                <div
-                  key={operation.id}
-                  className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:justify-between"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className="border-sky-200 bg-sky-50 text-sky-700"
-                      >
-                        {formatOperationType(operation)}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className={
-                          operation.status === "pending"
-                            ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : "border-rose-200 bg-rose-50 text-rose-700"
-                        }
-                      >
-                        {operation.status === "pending" ? "Pendiente" : "Fallido"}
-                      </Badge>
-                      <span className="text-xs text-slate-400">
-                        intento(s): {operation.attempts}
-                      </span>
+          <>
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="divide-y divide-slate-100">
+                {operations.map((operation) => (
+                  <div
+                    key={operation.id}
+                    className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className="border-sky-200 bg-sky-50 text-sky-700"
+                        >
+                          {formatOperationType(operation)}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className={
+                            operation.status === "pending"
+                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                              : "border-rose-200 bg-rose-50 text-rose-700"
+                          }
+                        >
+                          {operation.status === "pending" ? "Pendiente" : "Fallido"}
+                        </Badge>
+                        <span className="text-xs text-slate-400">
+                          intento(s): {operation.attempts}
+                        </span>
+                      </div>
+
+                      <p className="truncate text-sm font-medium text-slate-700">
+                        {formatOperationSummary(operation)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        creado: {formatDateTime(operation.createdAt)}
+                      </p>
+                      {operation.updatedAt && operation.updatedAt !== operation.createdAt && (
+                        <p className="text-xs text-slate-500">
+                          ultima actualizacion: {formatDateTime(operation.updatedAt)}
+                        </p>
+                      )}
+                      {operation.lastError && (
+                        <p className="mt-1 flex items-start gap-1 text-xs text-rose-600">
+                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span className="break-words">
+                            {formatSyncErrorMessage(operation.lastError)}
+                          </span>
+                        </p>
+                      )}
                     </div>
 
-                    <p className="truncate text-sm font-medium text-slate-700">
-                      {formatOperationSummary(operation)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      creado: {formatDateTime(operation.createdAt)}
-                    </p>
-                    {operation.updatedAt && operation.updatedAt !== operation.createdAt && (
-                      <p className="text-xs text-slate-500">
-                        ultima actualizacion: {formatDateTime(operation.updatedAt)}
-                      </p>
-                    )}
-                    {operation.lastError && (
-                      <p className="mt-1 flex items-start gap-1 text-xs text-rose-600">
-                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span className="break-words">{operation.lastError}</span>
-                      </p>
-                    )}
-                  </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleRetryOne(operation.id)}
+                        disabled={
+                          !syncSupported ||
+                          !isOnline ||
+                          actioningId === operation.id ||
+                          (isSyncing || isSyncingManual)
+                        }
+                      >
+                        {actioningId === operation.id ? (
+                          <>
+                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            Retry
+                          </>
+                        ) : (
+                          <>
+                            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                            Retry
+                          </>
+                        )}
+                      </Button>
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleRetryOne(operation.id)}
-                      disabled={
-                        !syncSupported ||
-                        !isOnline ||
-                        actioningId === operation.id ||
-                        (isSyncing || isSyncingManual)
-                      }
-                    >
-                      {actioningId === operation.id ? (
-                        <>
-                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                          Retry
-                        </>
-                      ) : (
-                        <>
-                          <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                          Retry
-                        </>
-                      )}
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="border-rose-200 text-rose-700 hover:bg-rose-50"
-                      onClick={() => void handleRemove(operation.id)}
-                    >
-                      <Trash2 className="mr-1 h-3.5 w-3.5" />
-                      Quitar
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                        onClick={() => void handleRemove(operation.id)}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        Quitar
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            </ScrollArea>
+
+            <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-slate-500">
+                La vista carga una muestra paginada para no congelar la app con miles de registros.
+              </p>
+              {hasMoreOperations ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisibleCount((current) => current + OFFLINE_PREVIEW_STEP)}
+                >
+                  <ChevronDown className="mr-1 h-3.5 w-3.5" />
+                  Cargar mas
+                </Button>
+              ) : null}
             </div>
-          </ScrollArea>
+          </>
         )}
       </div>
     </div>

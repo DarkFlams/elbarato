@@ -78,6 +78,7 @@ export default function VentasPage() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [filterPartner, setFilterPartner] = useState<string | null>(null);
   const [viewStateRestored, setViewStateRestored] = useState(false);
+  const [showCustomDates, setShowCustomDates] = useState(false);
 
   // Estados nuevos para Liquidación (Cintillo)
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -208,13 +209,6 @@ export default function VentasPage() {
     setFromDate(toEcuadorDateInput(start));
     setToDate(toEcuadorDateInput(end));
     setActivePreset(days);
-  };
-
-  const clearFilters = () => {
-    setFromDate("");
-    setToDate("");
-    setActivePreset(null);
-    setSelectedIndex(null);
   };
 
   const hasFilters = Boolean(fromDate || toDate);
@@ -499,67 +493,99 @@ export default function VentasPage() {
         </div>
 
         {/* Date Filters */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex bg-slate-100/50 p-1 rounded-lg border border-slate-200">
-            {[
-              { label: "Hoy", days: 1 },
-              { label: "7 días", days: 7 },
-              { label: "30 días", days: 30 },
-            ].map((preset) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {!showCustomDates ? (
+            <div className="flex bg-slate-100/50 p-1 rounded-lg border border-slate-200">
+              {[
+                { label: "Hoy", days: 1 },
+                { label: "7 días", days: 7 },
+                { label: "30 días", days: 30 },
+              ].map((preset) => (
+                <Button
+                  key={preset.days}
+                  variant="ghost"
+                  size="sm"
+                  className={`h-8 text-xs transition-colors ${
+                    activePreset === preset.days
+                      ? "bg-white shadow-sm text-slate-900 font-medium"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                  onClick={() => setPresetRange(preset.days)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+              <div className="w-px h-6 bg-slate-200 mx-1" />
               <Button
-                key={preset.days}
                 variant="ghost"
                 size="sm"
-                className={`h-8 text-xs transition-colors ${
-                  activePreset === preset.days
-                    ? "bg-white shadow-sm text-slate-900 font-medium"
-                    : "text-slate-600 hover:text-slate-900"
+                className={`h-8 text-xs text-slate-600 hover:text-slate-900 transition-colors ${
+                  activePreset === null ? "bg-white shadow-sm font-medium text-slate-900" : ""
                 }`}
-                onClick={() => setPresetRange(preset.days)}
+                onClick={() => setShowCustomDates(true)}
               >
-                {preset.label}
+                Personalizado
               </Button>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-slate-200 h-10 px-2 animate-in fade-in slide-in-from-right-4 duration-200">
+              <Input
+                type="date"
+                value={fromDate}
+                onChange={(e) => {
+                  setFromDate(e.target.value);
+                  setActivePreset(null);
+                }}
+                className="w-auto h-8 bg-transparent border-0 shadow-none text-xs px-2 focus-visible:ring-0"
+              />
+              <span className="text-slate-300">-</span>
+              <Input
+                type="date"
+                value={toDate}
+                onChange={(e) => {
+                  setToDate(e.target.value);
+                  setActivePreset(null);
+                }}
+                className="w-auto h-8 bg-transparent border-0 shadow-none text-xs px-2 focus-visible:ring-0"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Cerrar fechas"
+                className="h-6 w-6 text-slate-400 hover:text-slate-900 hover:bg-slate-200 ml-1 rounded-md"
+                onClick={() => {
+                  setShowCustomDates(false);
+                  if (activePreset === null && fromDate === "Hoy") {
+                    setPresetRange(1);
+                  }
+                }}
+              >
+                <FilterX className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
 
-          <div className="w-px h-6 bg-slate-200 mx-1" />
-
-          <Input
-            type="date"
-            value={fromDate}
-            onChange={(e) => {
-              setFromDate(e.target.value);
-              setActivePreset(null);
-            }}
-            className="w-auto bg-slate-50 border-slate-200"
-          />
-          <Input
-            type="date"
-            value={toDate}
-            onChange={(e) => {
-              setToDate(e.target.value);
-              setActivePreset(null);
-            }}
-            className="w-auto bg-slate-50 border-slate-200"
-          />
-          <Button
-            variant="outline"
-            className="border-slate-200 text-slate-700 bg-white"
-            onClick={clearFilters}
-            disabled={!hasFilters}
-          >
-            <FilterX className="h-4 w-4 mr-2" />
-            Limpiar
-          </Button>
-
-          <span className="text-xs text-slate-400 ml-auto font-medium">
-            {filteredSales.length} ticket{filteredSales.length !== 1 ? "s" : ""}
-          </span>
+          {(activePreset === null || filterPartner !== null) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 px-3 text-slate-500 hover:text-slate-900 bg-white"
+              onClick={() => {
+                setPresetRange(1);
+                setFilterPartner(null);
+                setShowCustomDates(false);
+              }}
+              title="Restablecer filtros"
+            >
+              <FilterX className="h-4 w-4 mr-1.5" />
+              Limpiar
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Cintillo de Liquidación */}
-      {!isLoading && (
+      {false && !isLoading && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2 shrink-0">
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
             <div>
@@ -731,6 +757,57 @@ export default function VentasPage() {
         </div>
         )}
       </div>
+
+      {!isLoading && (
+        <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Total Ventas
+              </p>
+              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-slate-900">
+                ${totalSales.toFixed(2)}
+              </h3>
+            </div>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+              <TrendingUp className="h-4 w-4" />
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowExpensesDrawer(true)}
+            className="group relative flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-colors hover:border-red-200"
+          >
+            <div className="min-w-0">
+              <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Gastos a Deducir
+                <Info className="h-3.5 w-3.5 text-slate-400 transition-colors group-hover:text-red-400" />
+              </p>
+              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-red-600">
+                -${totalExpensesAmount.toFixed(2)}
+              </h3>
+            </div>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <TrendingDown className="h-4 w-4" />
+            </div>
+            <div className="pointer-events-none absolute inset-0 rounded-lg bg-red-50/0 transition-colors group-hover:bg-red-50/50" />
+          </button>
+
+          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Liquidación Neta
+              </p>
+              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-slate-900">
+                ${netIncome.toFixed(2)}
+              </h3>
+            </div>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700">
+              <Wallet className="h-4 w-4" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drawer Metadatos de Gastos */}
       <Dialog open={showExpensesDrawer} onOpenChange={setShowExpensesDrawer}>

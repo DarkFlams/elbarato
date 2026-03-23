@@ -3,8 +3,6 @@
  * @description Formulario dedicado para registrar altas y bajas de stock.
  * Busca productos bajo demanda. Soporta pistola laser.
  *
- * NOTE: La opcion "Ropa Vieja / Bodega" esta oculta temporalmente.
- * Ver docs/ropa-vieja.md y migration_bodega_remate.sql para reactivar.
  */
 
 "use client";

@@ -5,30 +5,10 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import { ArrowUpDown } from "lucide-react";
 import { StockAdjustmentForm } from "@/components/inventory/stock-adjustment-form";
-import { InventoryMovementList } from "@/components/inventory/inventory-movement-list";
-import { getCatalogPartners } from "@/lib/local/catalog";
-import type { Partner } from "@/types/database";
 
 export default function InventarioMovimientosPage() {
-  const [partners, setPartners] = useState<Partner[]>([]);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
-
-  const fetchPartners = useCallback(async () => {
-    try {
-      const data = await getCatalogPartners();
-      setPartners((data as Partner[]) || []);
-    } catch (err) {
-      console.error("[InventarioMovimientosPage] fetchPartners error:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchPartners();
-  }, [fetchPartners]);
-
   return (
     <div className="flex flex-col h-full gap-4">
       <div>
@@ -43,16 +23,7 @@ export default function InventarioMovimientosPage() {
       </div>
 
       <div className="space-y-4">
-        <StockAdjustmentForm
-          onAdjusted={() => setRefreshTrigger((value) => value + 1)}
-        />
-      </div>
-
-      <div className="flex-1 min-h-0">
-        <InventoryMovementList
-          partners={partners}
-          refreshTrigger={refreshTrigger}
-        />
+        <StockAdjustmentForm />
       </div>
     </div>
   );

@@ -258,11 +258,11 @@ export function Cart() {
             <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
               <tr>
                 <th className="w-8 px-2 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">#</th>
-                <th className="w-24 px-2 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Código</th>
+                <th className="w-20 px-2 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Código</th>
                 <th className="px-2 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Artículo</th>
-                <th className="w-[72px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Cant.</th>
-                <th className="w-20 px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">P. Unit</th>
-                <th className="w-[75px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</th>
+                <th className="w-[68px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Cant.</th>
+                <th className="w-[72px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">P. Unit</th>
+                <th className="w-[72px] px-2 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</th>
                 <th className="w-8 px-1 py-2.5"></th>
               </tr>
             </thead>

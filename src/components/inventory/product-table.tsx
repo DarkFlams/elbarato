@@ -320,11 +320,6 @@ export function ProductTable({
   const hasActiveFilters = Boolean(
     searchQuery || filterOwner || stockFilter !== "all"
   );
-  const visibleStockTotal = products.reduce(
-    (sum, product) => sum + Number(product.stock || 0),
-    0
-  );
-
   const refresh = () => {
     void fetchProducts();
     void fetchCounts();
@@ -639,14 +634,14 @@ export function ProductTable({
               </table>
             </ScrollArea>
 
-            <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center gap-4 shrink-0 mt-auto shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+            <div className="mt-auto flex shrink-0 items-center gap-3 border-t border-slate-200 bg-slate-50 px-4 py-2.5 shadow-[0_-2px_4px_-2px_rgba(0,0,0,0.03)]">
               {hasMore ? (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={loadMore}
                   disabled={isLoadingMore}
-                  className="gap-2 text-slate-600"
+                  className="h-8 gap-1.5 px-3 text-xs text-slate-600"
                 >
                   {isLoadingMore ? (
                     <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -659,14 +654,11 @@ export function ProductTable({
                 <div />
               )}
 
-              <div className="ml-auto flex items-center gap-6">
-                <span className="font-semibold text-slate-600 uppercase text-sm tracking-wide">
+              <div className="ml-auto flex items-center">
+                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
                   {hasMore
                     ? `Cargados (${products.length} de ${totalCount} productos)`
                     : `Total (${products.length} productos)`}
-                </span>
-                <span className="font-bold text-xl text-slate-900 font-mono tabular-nums">
-                  {visibleStockTotal} und.
                 </span>
               </div>
             </div>

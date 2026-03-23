@@ -23,7 +23,7 @@ import { useCashSession } from "@/hooks/use-cash-session";
 import { playErrorSound, playSuccessSound } from "@/lib/audio";
 import { Cart } from "@/components/pos/cart";
 import { ExpensesPanel } from "@/components/pos/expenses-panel";
-import { PriceTierSelector } from "@/components/pos/price-tier-selector";
+import { PosTabs } from "@/components/pos/pos-tabs";
 import { ProductSearch } from "@/components/pos/product-search";
 import { SessionStats } from "@/components/pos/session-stats";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +36,7 @@ export default function CajaPage() {
   const { session, isLoading: sessionLoading } = useCashSession();
   const {
     addItem,
+    activeTabId,
     items,
     notes,
     setNotes,
@@ -105,13 +106,11 @@ export default function CajaPage() {
     <div className="relative flex h-full min-h-0 flex-col gap-2.5">
       <div className="flex min-h-0 w-full flex-1 flex-col gap-2.5 overflow-hidden lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 lg:min-w-[400px]">
+          <PosTabs />
+
           <div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm">
             <div className="flex-1">
               <ProductSearch />
-            </div>
-
-            <div className="hidden md:block">
-              <PriceTierSelector />
             </div>
 
             {lastScanned && (
@@ -140,74 +139,74 @@ export default function CajaPage() {
             </Badge>
           </div>
 
-          <div className="md:hidden">
-            <PriceTierSelector />
-          </div>
-
-          <div className="min-h-0 flex-1">
-            <Cart />
-          </div>
-
-          <div className="flex shrink-0 flex-row items-stretch gap-2.5">
-            <div className="flex flex-1 flex-col gap-0.5 self-stretch rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
-              <Label
-                htmlFor="notes"
-                className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
-              >
-                <PenLine className="h-2.5 w-2.5" />
-                Observaciones
-              </Label>
-              <Textarea
-                id="notes"
-                placeholder="Ej. Falta entregar producto, cliente VIP..."
-                className="min-h-[60px] flex-1 resize-none border-slate-200/60 bg-slate-50 px-2.5 py-2 text-[13px] font-medium text-slate-700 shadow-inner focus-visible:ring-indigo-500/30"
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                disabled={isProcessing}
-              />
+          <div
+            key={activeTabId}
+            className="flex min-h-0 flex-1 flex-col gap-2.5 animate-in fade-in-0 slide-in-from-right-2 zoom-in-[0.99] duration-200"
+          >
+            <div className="min-h-0 flex-1">
+              <Cart />
             </div>
 
-            <div className="self-stretch w-[255px] shrink-0 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm xl:w-[275px] 2xl:w-[310px]">
-              <div className="mt-auto grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label
-                    htmlFor="received"
-                    className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[11px]"
-                  >
-                    <Banknote className="h-3.5 w-3.5 text-emerald-600" />
-                    Efectivo recibido
-                  </Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600" />
-                    <Input
-                      id="received"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      className="h-9 border-emerald-200 bg-emerald-50/50 pl-7 font-mono text-base font-bold text-emerald-900 shadow-inner focus-visible:ring-emerald-500/40"
-                      value={amountReceived}
-                      onChange={(event) => setAmountReceived(event.target.value)}
-                      disabled={isProcessing}
-                    />
-                  </div>
-                </div>
+            <div className="flex shrink-0 flex-row items-start gap-2.5">
+              <div className="flex flex-1 flex-col gap-0.5 rounded-xl border border-slate-200 bg-white px-1.5 pb-1.5 pt-1 shadow-sm">
+                <Label
+                  htmlFor="notes"
+                  className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  <PenLine className="h-2.5 w-2.5" />
+                  Observaciones
+                </Label>
+                <Textarea
+                  id="notes"
+                  className="min-h-[42px] resize-none border-slate-200/60 bg-slate-50 px-2.5 py-2 text-[13px] font-medium leading-tight text-slate-700 shadow-inner focus-visible:ring-indigo-500/30"
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  disabled={isProcessing}
+                />
+              </div>
 
-                <div className="space-y-1">
-                  <Label className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[11px]">
-                    Cambio a entregar
-                  </Label>
-                  <div
-                    className={`flex h-9 items-center rounded-md border px-3 font-mono text-base font-bold shadow-inner transition-colors ${
-                      Number(amountReceived) >= total && Number(amountReceived) > 0
-                        ? "border-slate-900 bg-slate-800 text-white shadow-slate-900/20"
-                        : "border-slate-200 bg-slate-50 text-slate-400"
-                    }`}
-                  >
-                    <DollarSign className="mr-0.5 h-4 w-4 opacity-70" />
-                    {Number(amountReceived) > 0
-                      ? Math.max(0, Number(amountReceived) - total).toFixed(2)
-                      : "0.00"}
+              <div className="w-[255px] shrink-0 rounded-xl border border-slate-200 bg-white px-1.5 pb-1.5 pt-1 shadow-sm xl:w-[275px] 2xl:w-[310px]">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="received"
+                      className="flex items-center gap-1 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+                    >
+                      <Banknote className="h-3 w-3 text-emerald-600" />
+                      Efectivo recibido
+                    </Label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-emerald-600" />
+                      <Input
+                        id="received"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0.00"
+                        className="h-8 border-emerald-200 bg-emerald-50/50 pl-7 font-mono text-[15px] font-bold text-emerald-900 shadow-inner focus-visible:ring-emerald-500/40"
+                        value={amountReceived}
+                        onChange={(event) => setAmountReceived(event.target.value)}
+                        disabled={isProcessing}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-0.5">
+                    <Label className="flex items-center gap-1 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      Cambio a entregar
+                    </Label>
+                    <div
+                      className={`flex h-8 items-center rounded-md border px-3 font-mono text-[15px] font-bold shadow-inner transition-colors ${
+                        Number(amountReceived) >= total && Number(amountReceived) > 0
+                          ? "border-slate-900 bg-slate-800 text-white shadow-slate-900/20"
+                          : "border-slate-200 bg-slate-50 text-slate-400"
+                      }`}
+                    >
+                      <DollarSign className="mr-0.5 h-3.5 w-3.5 opacity-70" />
+                      {Number(amountReceived) > 0
+                        ? Math.max(0, Number(amountReceived) - total).toFixed(2)
+                        : "0.00"}
+                    </div>
                   </div>
                 </div>
               </div>

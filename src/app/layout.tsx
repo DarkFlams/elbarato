@@ -3,14 +3,14 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "POS Tienda de Ropa",
-  description: "Sistema de Punto de Venta y Control de Gastos",
+  title: "D'Lorens & El Barato POS",
+  description: "Sistema Administrativo - D'Lorens y El Barato",
   manifest: "/manifest.json",
   themeColor: "#4f46e5",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "POS Ropa",
+    title: "Administración D'Lorens",
   },
 };
 

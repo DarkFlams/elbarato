@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createClient } from "@/lib/supabase/client";
 import { isConnectivityError } from "@/lib/offline/queue";
+import { normalizeSyncErrorMessage } from "@/lib/local/sync-errors";
 import {
   listSyncQueueLocalFirst,
   markSyncQueueItemFailedLocalFirst,
@@ -117,6 +118,7 @@ interface SyncReferenceState {
 class RetryableSyncError extends Error {}
 
 let currentDesktopSyncPromise: Promise<DesktopSyncResult> | null = null;
+const PRODUCT_SYNC_CONCURRENCY = 6;
 
 function getSyncPriority(item: LocalSyncQueueItem) {
   if (item.entityName === "cash_sessions") return 0;
@@ -133,16 +135,6 @@ function getRpcRow<T = Record<string, unknown>>(data: unknown): T | null {
   }
 
   return (data as T | null) ?? null;
-}
-
-function normalizeErrorMessage(error: unknown) {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return "Error de sincronizacion desconocido";
 }
 
 function parsePayload<T>(item: LocalSyncQueueItem): T {
@@ -532,6 +524,79 @@ async function runDesktopOperation(item: LocalSyncQueueItem, state: SyncReferenc
   throw new Error(`Entidad de sync no soportada: ${item.entityName}`);
 }
 
+async function processSyncItem(
+  item: LocalSyncQueueItem,
+  state: SyncReferenceState,
+  result: DesktopSyncResult
+) {
+  result.processed += 1;
+
+  try {
+    await runDesktopOperation(item, state);
+    result.synced += 1;
+    return true;
+  } catch (error) {
+    const message = normalizeSyncErrorMessage(error);
+
+    if (error instanceof RetryableSyncError) {
+      await markSyncQueueItemFailedLocalFirst(item.id, message, true);
+      return true;
+    }
+
+    if (isConnectivityError(error)) {
+      await markSyncQueueItemFailedLocalFirst(item.id, message, true);
+      result.stopped_by_connectivity = true;
+      return false;
+    }
+
+    await markSyncQueueItemFailedLocalFirst(item.id, message, false);
+    result.failed += 1;
+    return true;
+  }
+}
+
+async function processProductItemsConcurrently(
+  items: LocalSyncQueueItem[],
+  state: SyncReferenceState,
+  result: DesktopSyncResult
+) {
+  const remaining = [...items];
+
+  while (remaining.length > 0) {
+    const selected: LocalSyncQueueItem[] = [];
+    const selectedKeys = new Set<string>();
+    let cursor = 0;
+
+    while (cursor < remaining.length && selected.length < PRODUCT_SYNC_CONCURRENCY) {
+      const candidate = remaining[cursor];
+      const key = `${candidate.entityName}:${candidate.entityLocalId}`;
+      if (selectedKeys.has(key)) {
+        cursor += 1;
+        continue;
+      }
+
+      selected.push(candidate);
+      selectedKeys.add(key);
+      remaining.splice(cursor, 1);
+    }
+
+    if (selected.length === 0) {
+      const fallback = remaining.shift();
+      if (!fallback) break;
+      const shouldContinue = await processSyncItem(fallback, state, result);
+      if (!shouldContinue) return false;
+      continue;
+    }
+
+    const batchResult = await Promise.all(selected.map((item) => processSyncItem(item, state, result)));
+    if (batchResult.some((item) => item === false)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 async function doSyncDesktopQueue(): Promise<DesktopSyncResult> {
   const result: DesktopSyncResult = {
     processed: 0,
@@ -556,28 +621,33 @@ async function doSyncDesktopQueue(): Promise<DesktopSyncResult> {
       return left.createdAt.localeCompare(right.createdAt);
     });
 
+  const buckets = new Map<number, LocalSyncQueueItem[]>();
   for (const item of pendingItems) {
-    result.processed += 1;
+    const priority = getSyncPriority(item);
+    const bucket = buckets.get(priority) ?? [];
+    bucket.push(item);
+    buckets.set(priority, bucket);
+  }
 
-    try {
-      await runDesktopOperation(item, state);
-      result.synced += 1;
-    } catch (error) {
-      const message = normalizeErrorMessage(error);
+  for (const priority of [0, 1, 2, 3, 4, 5]) {
+    const bucket = buckets.get(priority);
+    if (!bucket || bucket.length === 0) continue;
 
-      if (error instanceof RetryableSyncError) {
-        await markSyncQueueItemFailedLocalFirst(item.id, message, true);
-        continue;
-      }
+    if (priority === 1) {
+      const shouldContinue = await processProductItemsConcurrently(bucket, state, result);
+      if (!shouldContinue) break;
+      continue;
+    }
 
-      if (isConnectivityError(error)) {
-        await markSyncQueueItemFailedLocalFirst(item.id, message, true);
-        result.stopped_by_connectivity = true;
+    for (const item of bucket) {
+      const shouldContinue = await processSyncItem(item, state, result);
+      if (!shouldContinue) {
         break;
       }
+    }
 
-      await markSyncQueueItemFailedLocalFirst(item.id, message, false);
-      result.failed += 1;
+    if (result.stopped_by_connectivity) {
+      break;
     }
   }
 
