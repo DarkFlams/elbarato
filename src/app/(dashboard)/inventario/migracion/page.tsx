@@ -45,6 +45,16 @@ type BarcodeDictEntry = { barras: string; marca: string };
 interface ExistingProduct {
   id: string;
   barcode: string;
+  sku?: string | null;
+}
+
+type ExistingMatch = "none" | "barcode" | "sku" | "barcode_and_sku";
+
+interface PreparedProduct extends MappedProduct {
+  blockingErrors: string[];
+  warningErrors: string[];
+  existingMatch: ExistingMatch;
+  existingProductId: string | null;
 }
 
 interface MappedProduct {
@@ -80,6 +90,27 @@ function norm(s: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeLookupKey(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getBlockingErrors(errors: string[]): string[] {
+  return errors.filter((error) => !error.includes("Sin BARRAS"));
+}
+
+function getExistingMatchLabel(match: ExistingMatch): string {
+  switch (match) {
+    case "barcode":
+      return "por codigo de barras";
+    case "sku":
+      return "por SKU";
+    case "barcode_and_sku":
+      return "por codigo de barras y SKU";
+    default:
+      return "";
+  }
 }
 
 // ── Parse INVEN.xlsx (barcode dictionary) ─────────────────
@@ -152,7 +183,8 @@ function mapProducts(
     const row = Number(r.__row__);
     const codigo = String(r.codigo || "");
     const nombre = String(r.nombre || "");
-    const stock = Number(r.stock || 0);
+    const rawStock = Number(r.stock || 0);
+    const stock = Number.isFinite(rawStock) ? Math.trunc(rawStock) : 0;
     const pvp = Number(r.pvp || 0);
     const marca = String(r.marca || "");
     const ownerKey = norm(marca);
@@ -189,7 +221,7 @@ function mapProducts(
     if (!barcode) errors.push("Sin codigo de barras");
     if (!nombre) errors.push("Sin nombre");
     if (pvp <= 0) errors.push("Precio invalido");
-    if (stock < 0) errors.push("Stock negativo");
+    if (rawStock < 0) errors.push("Stock negativo");
     if (!ownerId) errors.push("Socia no definida");
     if (!dictEntry) errors.push("Sin BARRAS en diccionario (usa Codigo)");
 
@@ -225,7 +257,7 @@ export default function InventarioMigracionPage() {
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [summary, setSummary] = useState<{
     created: number;
-    updated: number;
+    existing: number;
     failed: number;
     ignored: number;
     errors: string[];
@@ -255,18 +287,98 @@ export default function InventarioMigracionPage() {
 
   // ── Mapped preview ─────────
 
-  const mapped = useMemo(() => {
+  const mapped = useMemo<PreparedProduct[]>(() => {
     if (invRows.length === 0) return [];
     const minStock = Math.max(parseInt(defaultMinStock, 10) || 0, 0);
-    return mapProducts(invRows, barcodeDict, partners, defaultOwnerId, minStock);
-  }, [invRows, barcodeDict, partners, defaultOwnerId, defaultMinStock]);
+    const baseProducts = mapProducts(invRows, barcodeDict, partners, defaultOwnerId, minStock);
+
+    const existingByBarcode = new Map<string, ExistingProduct>();
+    const existingBySku = new Map<string, ExistingProduct>();
+
+    for (const product of existingProducts) {
+      const barcodeKey = normalizeLookupKey(product.barcode);
+      if (barcodeKey) existingByBarcode.set(barcodeKey, product);
+
+      const skuKey = normalizeLookupKey(product.sku);
+      if (skuKey) existingBySku.set(skuKey, product);
+    }
+
+    return baseProducts.map((product) => {
+      const blockingErrors = getBlockingErrors(product.errors);
+      const warningErrors = product.errors.filter((error) => error.includes("Sin BARRAS"));
+      const barcodeMatch = existingByBarcode.get(normalizeLookupKey(product.barcode));
+      const skuMatch = existingBySku.get(normalizeLookupKey(product.codigo));
+
+      if (barcodeMatch && skuMatch) {
+        if (barcodeMatch.id === skuMatch.id) {
+          return {
+            ...product,
+            blockingErrors,
+            warningErrors,
+            existingMatch: "barcode_and_sku",
+            existingProductId: barcodeMatch.id,
+          };
+        }
+
+        return {
+          ...product,
+          blockingErrors: [
+            ...blockingErrors,
+            "Conflicto: el codigo de barras y el SKU ya existen en productos distintos",
+          ],
+          warningErrors,
+          existingMatch: "none",
+          existingProductId: null,
+        };
+      }
+
+      if (barcodeMatch) {
+        return {
+          ...product,
+          blockingErrors,
+          warningErrors,
+          existingMatch: "barcode",
+          existingProductId: barcodeMatch.id,
+        };
+      }
+
+      if (skuMatch) {
+        return {
+          ...product,
+          blockingErrors,
+          warningErrors,
+          existingMatch: "sku",
+          existingProductId: skuMatch.id,
+        };
+      }
+
+      return {
+        ...product,
+        blockingErrors,
+        warningErrors,
+        existingMatch: "none",
+        existingProductId: null,
+      };
+    });
+  }, [invRows, barcodeDict, partners, defaultOwnerId, defaultMinStock, existingProducts]);
 
   const stats = useMemo(() => {
-    const toImport = mapped.filter((m) => !m.ignored && m.errors.length === 0);
+    const toImport = mapped.filter(
+      (m) => !m.ignored && m.blockingErrors.length === 0 && m.existingMatch === "none"
+    );
+    const existing = mapped.filter(
+      (m) => !m.ignored && m.blockingErrors.length === 0 && m.existingMatch !== "none"
+    );
     const toIgnore = mapped.filter((m) => m.ignored);
-    const withErrors = mapped.filter((m) => !m.ignored && m.errors.length > 0);
-    const withoutBarras = mapped.filter((m) => !m.ignored && m.errors.some((e) => e.includes("Sin BARRAS")));
-    return { toImport: toImport.length, toIgnore: toIgnore.length, withErrors: withErrors.length, withoutBarras: withoutBarras.length };
+    const withErrors = mapped.filter((m) => !m.ignored && m.blockingErrors.length > 0);
+    const withoutBarras = mapped.filter((m) => !m.ignored && m.warningErrors.length > 0);
+    return {
+      toImport: toImport.length,
+      existing: existing.length,
+      toIgnore: toIgnore.length,
+      withErrors: withErrors.length,
+      withoutBarras: withoutBarras.length,
+    };
   }, [mapped]);
 
   // ── File handlers ──────────
@@ -316,13 +428,33 @@ export default function InventarioMigracionPage() {
       return;
     }
 
-    const minStock = Math.max(parseInt(defaultMinStock, 10) || 0, 0);
-    const products = mapProducts(invRows, barcodeDict, partners, defaultOwnerId, minStock);
-    const barcodeMap = new Map(
-      existingProducts.map((p) => [p.barcode.toLowerCase(), p])
+    const products = mapped.filter(
+      (product) =>
+        !product.ignored &&
+        product.blockingErrors.length === 0 &&
+        product.existingMatch === "none"
     );
 
-    let created = 0, updated = 0, failed = 0, ignored = 0;
+    if (products.length === 0) {
+      toast.info("No hay productos faltantes para importar");
+      return;
+    }
+
+    const barcodeMap = new Map(
+      existingProducts
+        .map((product) => [normalizeLookupKey(product.barcode), product] as const)
+        .filter(([key]) => key)
+    );
+    const skuMap = new Map(
+      existingProducts
+        .map((product) => [normalizeLookupKey(product.sku), product] as const)
+        .filter(([key]) => key)
+    );
+
+    let created = 0;
+    let existing = stats.existing;
+    let failed = 0;
+    let ignored = stats.toIgnore;
     const errors: string[] = [];
 
     setIsImporting(true);
@@ -332,25 +464,19 @@ export default function InventarioMigracionPage() {
     for (let i = 0; i < products.length; i++) {
       const m = products[i];
 
-      if (m.ignored) {
-        ignored++;
-        setProgress({ current: i + 1, total: products.length });
-        continue;
-      }
-
-      if (m.errors.filter((e) => !e.includes("Sin BARRAS")).length > 0) {
-        failed++;
-        if (errors.length < 25) {
-          errors.push(`Fila ${m.row}: ${m.errors.join(", ")}`);
-        }
-        setProgress({ current: i + 1, total: products.length });
-        continue;
-      }
-
       try {
-        const existing = barcodeMap.get(m.barcode.toLowerCase());
+        const barcodeKey = normalizeLookupKey(m.barcode);
+        const skuKey = normalizeLookupKey(m.codigo);
+        const alreadyExisting =
+          (barcodeKey && barcodeMap.get(barcodeKey)) ||
+          (skuKey && skuMap.get(skuKey));
+
+        if (alreadyExisting) {
+          existing++;
+          continue;
+        }
+
         const result = await importMigrationProductLocalFirst({
-          productId: existing?.id ?? null,
           barcode: m.barcode,
           sku: m.codigo,
           name: m.name,
@@ -362,11 +488,17 @@ export default function InventarioMigracionPage() {
         });
         const productId = String(result?.productId || "");
 
-        if (existing) updated++;
-        else created++;
+        created++;
 
         if (productId) {
-          barcodeMap.set(m.barcode.toLowerCase(), { id: productId, barcode: m.barcode });
+          const nextProduct: ExistingProduct = {
+            id: productId,
+            barcode: m.barcode,
+            sku: m.codigo,
+          };
+
+          if (barcodeKey) barcodeMap.set(barcodeKey, nextProduct);
+          if (skuKey) skuMap.set(skuKey, nextProduct);
         }
       } catch (err) {
         failed++;
@@ -379,17 +511,17 @@ export default function InventarioMigracionPage() {
       }
     }
 
-    setSummary({ created, updated, failed, ignored, errors });
+    setSummary({ created, existing, failed, ignored, errors });
     setIsImporting(false);
     await fetchContext();
 
     if (failed > 0) {
       toast.warning("Importacion finalizada con observaciones", {
-        description: `Creados: ${created}, actualizados: ${updated}, ignorados: ${ignored}, fallidos: ${failed}`,
+        description: `Creados: ${created}, ya existian: ${existing}, ignorados: ${ignored}, fallidos: ${failed}`,
       });
     } else {
       toast.success("Importacion completada", {
-        description: `Creados: ${created}, actualizados: ${updated}, ignorados: ${ignored}`,
+        description: `Creados: ${created}, ya existian: ${existing}, ignorados: ${ignored}`,
       });
     }
   };
@@ -500,7 +632,7 @@ export default function InventarioMigracionPage() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Importar
+                  Importar faltantes
                 </>
               )}
             </Button>
@@ -512,7 +644,11 @@ export default function InventarioMigracionPage() {
           <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
             <Badge variant="outline" className="gap-1">
               <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-              A importar: {stats.toImport}
+              Faltantes a importar: {stats.toImport}
+            </Badge>
+            <Badge variant="outline" className="gap-1 text-blue-700 border-blue-200">
+              <Database className="h-3 w-3 text-blue-500" />
+              Ya existen: {stats.existing}
             </Badge>
             <Badge variant="outline" className="gap-1">
               <XCircle className="h-3 w-3 text-slate-400" />
@@ -552,8 +688,10 @@ export default function InventarioMigracionPage() {
                     className={`rounded-md border p-2 text-xs space-y-0.5 ${
                       m.ignored
                         ? "border-slate-200 bg-slate-50"
-                        : m.errors.length > 0
+                        : m.blockingErrors.length > 0
                         ? "border-rose-200 bg-rose-50"
+                        : m.existingMatch !== "none"
+                        ? "border-blue-200 bg-blue-50"
                         : "border-emerald-200 bg-emerald-50"
                     }`}
                   >
@@ -567,11 +705,19 @@ export default function InventarioMigracionPage() {
                     {m.ignored && (
                       <p className="text-amber-600 font-medium">{m.ignoreReason}</p>
                     )}
-                    {!m.ignored && m.errors.length > 0 && (
-                      <p className="text-rose-600 font-medium">{m.errors.join(", ")}</p>
+                    {!m.ignored && m.blockingErrors.length > 0 && (
+                      <p className="text-rose-600 font-medium">{m.blockingErrors.join(", ")}</p>
                     )}
-                    {!m.ignored && m.errors.length === 0 && (
-                      <p className="text-emerald-600 font-medium">✓ Listo para importar</p>
+                    {!m.ignored && m.blockingErrors.length === 0 && m.existingMatch !== "none" && (
+                      <p className="text-blue-700 font-medium">
+                        Ya existe en inventario ({getExistingMatchLabel(m.existingMatch)})
+                      </p>
+                    )}
+                    {!m.ignored && m.blockingErrors.length === 0 && m.existingMatch === "none" && (
+                      <p className="text-emerald-600 font-medium">Listo para importar faltante</p>
+                    )}
+                    {!m.ignored && m.warningErrors.length > 0 && (
+                      <p className="text-amber-700 font-medium">{m.warningErrors.join(", ")}</p>
                     )}
                   </div>
                 ))
@@ -593,8 +739,8 @@ export default function InventarioMigracionPage() {
                     <p className="text-emerald-600">Creados</p>
                   </div>
                   <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-center">
-                    <p className="text-lg font-bold text-blue-700">{summary.updated}</p>
-                    <p className="text-blue-600">Actualizados</p>
+                    <p className="text-lg font-bold text-blue-700">{summary.existing}</p>
+                    <p className="text-blue-600">Ya existian</p>
                   </div>
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-2 text-center">
                     <p className="text-lg font-bold text-slate-700">{summary.ignored}</p>

@@ -1,12 +1,13 @@
 $ErrorActionPreference = "Stop"
 
-$hostIp = "127.0.0.1"
+$listenHost = "127.0.0.1"
+$healthHost = "127.0.0.1"
 $port = 4310
-$url = "http://$hostIp`:$port"
+$healthUrl = "http://$healthHost`:$port"
 
 function Test-NextDevServer {
   try {
-    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
+    $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2
     $xPoweredBy = $response.Headers["x-powered-by"]
     $isNext = $false
 
@@ -24,12 +25,12 @@ function Test-NextDevServer {
   }
 }
 
-$listener = Get-NetTCPConnection -LocalAddress $hostIp -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
   Select-Object -First 1
 
 if ($listener) {
   if (Test-NextDevServer) {
-    Write-Host "[tauri-before-dev] Reusing existing Next dev server at $url"
+    Write-Host "[tauri-before-dev] Reusing existing Next dev server at $healthUrl"
     exit 0
   }
 
@@ -43,5 +44,5 @@ if ($listener) {
   exit 1
 }
 
-Write-Host "[tauri-before-dev] Starting Next dev server at $url"
-npm run dev -- --hostname $hostIp --port $port
+Write-Host "[tauri-before-dev] Starting Next dev server at http://$listenHost`:$port"
+npm run dev -- --hostname $listenHost --port $port

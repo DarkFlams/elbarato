@@ -27,6 +27,10 @@ import type { Partner, ProductWithOwner } from "@/types/database";
 export default function InventarioPage() {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [editingProduct, setEditingProduct] = useState<ProductWithOwner | null>(
+    null
+  );
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [labelProduct, setLabelProduct] = useState<ProductWithOwner | null>(
     null
   );
@@ -47,6 +51,18 @@ export default function InventarioPage() {
 
   const handleProductSaved = () => {
     setRefreshTrigger((prev) => prev + 1);
+  };
+
+  const handleEditProduct = (product: ProductWithOwner) => {
+    setEditingProduct(product);
+    setIsEditDialogOpen(true);
+  };
+
+  const handleEditDialogChange = (open: boolean) => {
+    setIsEditDialogOpen(open);
+    if (!open) {
+      setEditingProduct(null);
+    }
   };
 
   return (
@@ -72,9 +88,19 @@ export default function InventarioPage() {
         <ProductTable
           partners={partners}
           refreshTrigger={refreshTrigger}
+          onEditProduct={handleEditProduct}
           onGenerateLabel={(product) => setLabelProduct(product)}
         />
       </div>
+
+      <ProductForm
+        partners={partners}
+        product={editingProduct}
+        open={isEditDialogOpen}
+        onOpenChange={handleEditDialogChange}
+        onSaved={handleProductSaved}
+        showDefaultTrigger={false}
+      />
 
       {/* Modal de etiqueta */}
       <BarcodeLabel

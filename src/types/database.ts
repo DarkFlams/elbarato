@@ -53,6 +53,7 @@ export interface Product {
   sale_price: number;
   stock: number;
   min_stock: number;
+  stock_revision?: number;
   image_url: string | null;
   is_active: boolean;
   is_clearance: boolean;

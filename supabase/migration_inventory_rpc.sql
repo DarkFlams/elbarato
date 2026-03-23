@@ -89,7 +89,7 @@ BEGIN
     p.created_at,
     p.updated_at,
     pa.id AS owner_uuid,
-    pa.name AS owner_name,
+    pa.name::TEXT AS owner_name,
     pa.display_name AS owner_display_name,
     pa.color_hex AS owner_color_hex
   FROM products p

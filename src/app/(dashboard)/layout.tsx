@@ -35,6 +35,7 @@ import {
   ChevronRight,
   Loader2,
   Printer,
+  Smartphone,
 } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
 import { OfflineSyncIndicator } from "@/components/offline/offline-sync-indicator";
@@ -56,6 +57,7 @@ const navigation = [
     items: [
       { title: "Inventario", href: "/inventario", icon: Package },
       { title: "Altas y Bajas", href: "/inventario/movimientos", icon: ArrowUpDown },
+      { title: "Stock Movil", href: "/stock-movil", icon: Smartphone },
       { title: "Migracion", href: "/inventario/migracion", icon: Database },
       { title: "Reportes", href: "/reportes", icon: BarChart3 },
       { title: "Impresion", href: "/impresion", icon: Printer },

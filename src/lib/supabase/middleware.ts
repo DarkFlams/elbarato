@@ -3,6 +3,38 @@ import { NextResponse, type NextRequest } from "next/server";
 import { isAuthBypassEnabled } from "@/lib/auth-mode";
 
 export async function updateSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const userAgent = request.headers.get("user-agent")?.toLowerCase() ?? "";
+  const hasDesktopQuery = request.nextUrl.searchParams.get("desktop") === "1";
+  const hasDesktopCookie = request.cookies.get("desktop_runtime")?.value === "1";
+  const isDesktopRequest =
+    userAgent.includes("tauri") || hasDesktopQuery || hasDesktopCookie;
+  const isMobileToolPath =
+    pathname === "/movil/stock" || pathname.startsWith("/movil/stock/");
+  const isAllowedInfraPath =
+    pathname.startsWith("/api/") ||
+    pathname === "/manifest.json" ||
+    pathname === "/sw.js";
+
+  // Persist desktop mode in dev sessions where user-agent may not expose "tauri".
+  if (hasDesktopQuery && !hasDesktopCookie) {
+    const response = NextResponse.next({ request });
+    response.cookies.set("desktop_runtime", "1", {
+      path: "/",
+      httpOnly: false,
+      sameSite: "lax",
+    });
+    return response;
+  }
+
+  // En web publica solo se exponen herramientas rapidas (movil/stock).
+  // El dashboard completo queda reservado para runtime desktop (Tauri).
+  if (!isDesktopRequest && !isMobileToolPath && !isAllowedInfraPath) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/movil/stock";
+    return NextResponse.redirect(url);
+  }
+
   if (isAuthBypassEnabled()) {
     return NextResponse.next({ request });
   }
@@ -55,8 +87,9 @@ export async function updateSession(request: NextRequest) {
   // If no user and not on auth pages, redirect to login
   if (
     !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
+    !pathname.startsWith("/login") &&
+    !pathname.startsWith("/auth") &&
+    !pathname.startsWith("/movil/stock")
   ) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

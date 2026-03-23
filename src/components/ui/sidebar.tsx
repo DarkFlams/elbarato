@@ -510,6 +510,12 @@ function SidebarMenuButton({
     tooltip?: string | React.ComponentProps<typeof TooltipContent>
   } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const { isMobile, state } = useSidebar()
+  const [hasMounted, setHasMounted] = React.useState(false)
+
+  React.useEffect(() => {
+    setHasMounted(true)
+  }, [])
+
   const comp = useRender({
     defaultTagName: "button",
     props: mergeProps<"button">(
@@ -518,7 +524,7 @@ function SidebarMenuButton({
       },
       props
     ),
-    render: !tooltip ? render : <TooltipTrigger render={render} />,
+    render: !tooltip || !hasMounted ? render : <TooltipTrigger render={render} />,
     state: {
       slot: "sidebar-menu-button",
       sidebar: "menu-button",
@@ -528,6 +534,12 @@ function SidebarMenuButton({
   })
 
   if (!tooltip) {
+    return comp
+  }
+
+  // Base UI tooltip ids can differ between SSR and client hydration.
+  // Defer tooltip wiring until mount to avoid hydration mismatch warnings.
+  if (!hasMounted) {
     return comp
   }
 

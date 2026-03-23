@@ -3,8 +3,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createClient } from "@/lib/supabase/client";
 import { isMissingTauriCommandError, isTauriRuntime } from "@/lib/tauri-runtime";
-import type { InventoryMovementWithProduct, Partner, ProductWithOwner } from "@/types/database";
-import { findCatalogProductByBarcode, getCatalogProducts } from "./catalog";
+import type { InventoryMovementWithProduct, Partner } from "@/types/database";
+import {
+  findCatalogProductByBarcode,
+  searchCatalogProductsByIntent,
+} from "./catalog";
 
 interface LocalPartnerRecord extends Partner {
   remote_id?: string | null;
@@ -43,7 +46,12 @@ interface LocalInventoryMovement {
 }
 
 export async function searchAdjustmentProductsLocalFirst(query: string) {
-  const products = await getCatalogProducts({ search: query, limit: 10, offset: 0 });
+  const products = await searchCatalogProductsByIntent({
+    search: query,
+    limit: 10,
+    offset: 0,
+    stockFilter: "all",
+  });
   return products.map((product) => ({
     id: product.id,
     name: product.name,

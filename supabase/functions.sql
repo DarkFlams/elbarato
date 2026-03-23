@@ -37,6 +37,7 @@ BEGIN
 
   UPDATE products
   SET stock = stock - p_quantity,
+      stock_revision = stock_revision + 1,
       updated_at = now()
   WHERE id = p_product_id
     AND stock >= p_quantity;
@@ -63,6 +64,7 @@ BEGIN
 
   UPDATE products
   SET stock = stock + p_quantity,
+      stock_revision = stock_revision + 1,
       updated_at = now()
   WHERE id = p_product_id;
 
@@ -289,6 +291,7 @@ BEGIN
 
     UPDATE products
     SET stock = stock - v_quantity,
+        stock_revision = stock_revision + 1,
         updated_at = now()
     WHERE id = v_product.id
       AND stock >= v_quantity;
@@ -339,6 +342,530 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public;
+
+/**
+ * issue_mobile_access_code
+ * Emite un codigo temporal para acceso movil de inventario.
+ */
+DROP FUNCTION IF EXISTS issue_mobile_access_code(INT);
+
+CREATE OR REPLACE FUNCTION issue_mobile_access_code(
+  p_ttl_minutes INT DEFAULT 60
+)
+RETURNS TABLE (
+  access_code_id UUID,
+  code TEXT,
+  qr_token TEXT,
+  expires_at TIMESTAMPTZ
+) AS $$
+DECLARE
+  v_code TEXT;
+  v_qr_token TEXT;
+  v_expires_at TIMESTAMPTZ;
+  v_id UUID;
+  v_attempt INT := 0;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'Usuario no autenticado';
+  END IF;
+
+  IF COALESCE(p_ttl_minutes, 0) <= 0 OR p_ttl_minutes > 1440 THEN
+    RAISE EXCEPTION 'TTL invalido. Debe estar entre 1 y 1440 minutos';
+  END IF;
+
+  v_expires_at := now() + make_interval(mins => p_ttl_minutes);
+
+  LOOP
+    v_attempt := v_attempt + 1;
+    EXIT WHEN v_attempt > 20;
+
+    -- Codigo manual simple: 6 digitos numericos.
+    v_code := lpad((floor(random() * 1000000)::INT)::TEXT, 6, '0');
+    v_qr_token := replace(gen_random_uuid()::TEXT, '-', '') || replace(gen_random_uuid()::TEXT, '-', '');
+
+    BEGIN
+      INSERT INTO mobile_access_codes (
+        code,
+        qr_token,
+        issued_by,
+        expires_at
+      )
+      VALUES (
+        v_code,
+        v_qr_token,
+        auth.uid(),
+        v_expires_at
+      )
+      RETURNING id INTO v_id;
+
+      RETURN QUERY
+      SELECT v_id, v_code, v_qr_token, v_expires_at;
+      RETURN;
+    EXCEPTION
+      WHEN unique_violation THEN
+        -- Reintento de generacion de codigo/token.
+        CONTINUE;
+    END;
+  END LOOP;
+
+  RAISE EXCEPTION 'No se pudo generar codigo de acceso. Intenta nuevamente';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * consume_mobile_access_code
+ * Consume un codigo/token y abre sesion temporal para operador movil.
+ */
+DROP FUNCTION IF EXISTS consume_mobile_access_code(TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION consume_mobile_access_code(
+  p_code_or_token TEXT,
+  p_operator_name TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+  session_id UUID,
+  access_code_id UUID,
+  scope TEXT,
+  expires_at TIMESTAMPTZ
+) AS $$
+DECLARE
+  v_lookup_raw TEXT;
+  v_lookup_alnum TEXT;
+  v_lookup_upper TEXT;
+  v_lookup_lower TEXT;
+  v_lookup_code TEXT;
+  v_lookup_code_legacy TEXT;
+  v_access RECORD;
+  v_existing_session RECORD;
+  v_session_id UUID;
+  v_operator_name TEXT;
+BEGIN
+  v_lookup_raw := trim(COALESCE(p_code_or_token, ''));
+  IF v_lookup_raw = '' THEN
+    RAISE EXCEPTION 'Codigo o token requerido';
+  END IF;
+
+  v_lookup_alnum := regexp_replace(v_lookup_raw, '[^A-Za-z0-9]', '', 'g');
+  IF v_lookup_alnum = '' THEN
+    RAISE EXCEPTION 'Codigo o token requerido';
+  END IF;
+
+  v_lookup_upper := upper(v_lookup_alnum);
+  v_lookup_lower := lower(v_lookup_alnum);
+  v_lookup_code := v_lookup_upper;
+  v_lookup_code_legacy := NULL;
+
+  -- Compatibilidad con codigos antiguos tipo ABC-123 cuando el usuario escribe ABC123.
+  IF length(v_lookup_upper) = 6 THEN
+    v_lookup_code_legacy := substr(v_lookup_upper, 1, 3) || '-' || substr(v_lookup_upper, 4, 3);
+  END IF;
+
+  v_operator_name := NULLIF(trim(COALESCE(p_operator_name, '')), '');
+
+  SELECT
+    mac.id,
+    mac.expires_at
+  INTO v_access
+  FROM mobile_access_codes mac
+  WHERE mac.revoked_at IS NULL
+    AND mac.consumed_at IS NULL
+    AND mac.expires_at > now()
+    AND (
+      mac.code = v_lookup_code
+      OR (v_lookup_code_legacy IS NOT NULL AND mac.code = v_lookup_code_legacy)
+      OR mac.qr_token = v_lookup_lower
+    )
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE mobile_access_codes
+    SET consumed_at = now()
+    WHERE id = v_access.id;
+
+    INSERT INTO mobile_sessions (
+      access_code_id,
+      operator_name,
+      scope,
+      expires_at,
+      last_seen_at
+    )
+    VALUES (
+      v_access.id,
+      v_operator_name,
+      'stock_only',
+      v_access.expires_at,
+      now()
+    )
+    RETURNING id INTO v_session_id;
+
+    RETURN QUERY
+    SELECT v_session_id, v_access.id, 'stock_only'::TEXT, v_access.expires_at;
+    RETURN;
+  END IF;
+
+  SELECT
+    mac.id,
+    mac.expires_at
+  INTO v_access
+  FROM mobile_access_codes mac
+  WHERE mac.revoked_at IS NULL
+    AND mac.expires_at > now()
+    AND (
+      mac.code = v_lookup_code
+      OR (v_lookup_code_legacy IS NOT NULL AND mac.code = v_lookup_code_legacy)
+      OR mac.qr_token = v_lookup_lower
+    )
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Codigo invalido o expirado';
+  END IF;
+
+  SELECT
+    ms.id,
+    ms.expires_at
+  INTO v_existing_session
+  FROM mobile_sessions ms
+  WHERE ms.access_code_id = v_access.id
+    AND ms.revoked_at IS NULL
+    AND ms.expires_at > now()
+  ORDER BY ms.created_at DESC
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE mobile_sessions
+    SET
+      operator_name = COALESCE(v_operator_name, operator_name),
+      last_seen_at = now()
+    WHERE id = v_existing_session.id;
+
+    RETURN QUERY
+    SELECT v_existing_session.id, v_access.id, 'stock_only'::TEXT, v_existing_session.expires_at;
+    RETURN;
+  END IF;
+
+  RAISE EXCEPTION 'Codigo invalido, expirado o ya usado';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * touch_mobile_session
+ * Renueva heartbeat de sesion movil activa.
+ */
+DROP FUNCTION IF EXISTS touch_mobile_session(UUID);
+
+CREATE OR REPLACE FUNCTION touch_mobile_session(
+  p_session_id UUID
+)
+RETURNS BOOLEAN AS $$
+BEGIN
+  IF p_session_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  UPDATE mobile_sessions
+  SET last_seen_at = now()
+  WHERE id = p_session_id
+    AND revoked_at IS NULL
+    AND expires_at > now();
+
+  RETURN FOUND;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * revoke_mobile_session
+ * Revoca una sesion movil desde desktop.
+ */
+DROP FUNCTION IF EXISTS revoke_mobile_session(UUID);
+
+CREATE OR REPLACE FUNCTION revoke_mobile_session(
+  p_session_id UUID
+)
+RETURNS BOOLEAN AS $$
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'Usuario no autenticado';
+  END IF;
+
+  IF p_session_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  UPDATE mobile_sessions
+  SET revoked_at = now()
+  WHERE id = p_session_id
+    AND revoked_at IS NULL;
+
+  RETURN FOUND;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * apply_stock_count_adjustment
+ * Ajuste por conteo fisico con concurrencia optimista por stock_revision.
+ */
+DROP FUNCTION IF EXISTS apply_stock_count_adjustment(UUID, INT, BIGINT, TEXT, TEXT, UUID);
+
+CREATE OR REPLACE FUNCTION apply_stock_count_adjustment(
+  p_product_id UUID,
+  p_counted_stock INT,
+  p_expected_revision BIGINT,
+  p_reason TEXT DEFAULT 'physical_count',
+  p_source TEXT DEFAULT 'mobile_count',
+  p_session_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+  status TEXT,
+  product_id UUID,
+  stock_before INT,
+  stock_after INT,
+  delta INT,
+  expected_revision BIGINT,
+  actual_revision BIGINT,
+  new_revision BIGINT,
+  adjustment_id UUID
+) AS $$
+DECLARE
+  v_product RECORD;
+  v_delta INT;
+  v_new_revision BIGINT;
+  v_adjustment_id UUID;
+BEGIN
+  IF p_product_id IS NULL THEN
+    RAISE EXCEPTION 'Producto requerido';
+  END IF;
+
+  IF COALESCE(p_counted_stock, -1) < 0 THEN
+    RAISE EXCEPTION 'Conteo fisico invalido';
+  END IF;
+
+  IF COALESCE(p_expected_revision, 0) <= 0 THEN
+    RAISE EXCEPTION 'Revision esperada invalida';
+  END IF;
+
+  IF p_source NOT IN ('mobile_count', 'desktop_manual', 'audit_round') THEN
+    RAISE EXCEPTION 'Source invalido: %', p_source;
+  END IF;
+
+  IF p_source IN ('mobile_count', 'audit_round') THEN
+    IF p_session_id IS NULL THEN
+      RAISE EXCEPTION 'Sesion movil requerida para source %', p_source;
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM mobile_sessions
+      WHERE id = p_session_id
+        AND revoked_at IS NULL
+        AND expires_at > now()
+    ) THEN
+      RAISE EXCEPTION 'Sesion movil invalida o expirada';
+    END IF;
+  END IF;
+
+  SELECT
+    id,
+    stock,
+    stock_revision,
+    is_active
+  INTO v_product
+  FROM products
+  WHERE id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR NOT v_product.is_active THEN
+    RAISE EXCEPTION 'Producto no encontrado o inactivo';
+  END IF;
+
+  IF v_product.stock_revision <> p_expected_revision THEN
+    RETURN QUERY
+    SELECT
+      'conflict'::TEXT,
+      v_product.id,
+      v_product.stock,
+      v_product.stock,
+      0,
+      p_expected_revision,
+      v_product.stock_revision,
+      v_product.stock_revision,
+      NULL::UUID;
+    RETURN;
+  END IF;
+
+  v_delta := p_counted_stock - v_product.stock;
+
+  UPDATE products
+  SET
+    stock = p_counted_stock,
+    stock_revision = stock_revision + 1,
+    updated_at = now()
+  WHERE id = v_product.id
+  RETURNING stock_revision INTO v_new_revision;
+
+  IF v_delta <> 0 THEN
+    INSERT INTO inventory_movements (
+      product_id,
+      quantity_change,
+      reason,
+      reference_id,
+      performed_by
+    )
+    VALUES (
+      v_product.id,
+      v_delta,
+      'manual_adjustment',
+      v_product.id,
+      auth.uid()
+    );
+  END IF;
+
+  INSERT INTO stock_adjustments (
+    product_id,
+    performed_by_session_id,
+    source,
+    reason,
+    stock_before,
+    stock_counted,
+    delta,
+    stock_revision_before,
+    stock_revision_after,
+    review_status
+  )
+  VALUES (
+    v_product.id,
+    p_session_id,
+    p_source,
+    COALESCE(NULLIF(trim(COALESCE(p_reason, '')), ''), 'physical_count'),
+    v_product.stock,
+    p_counted_stock,
+    v_delta,
+    v_product.stock_revision,
+    v_new_revision,
+    'auto_applied'
+  )
+  RETURNING id INTO v_adjustment_id;
+
+  RETURN QUERY
+  SELECT
+    'ok'::TEXT,
+    v_product.id,
+    v_product.stock,
+    p_counted_stock,
+    v_delta,
+    p_expected_revision,
+    v_product.stock_revision,
+    v_new_revision,
+    v_adjustment_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * find_stock_mobile_product
+ * Busca producto activo para modulo movil validando sesion vigente.
+ * Prioriza coincidencia exacta de barcode/SKU y luego nombre.
+ */
+DROP FUNCTION IF EXISTS find_stock_mobile_product(TEXT, UUID);
+
+CREATE OR REPLACE FUNCTION find_stock_mobile_product(
+  p_query TEXT,
+  p_session_id UUID
+)
+RETURNS TABLE (
+  product_id UUID,
+  product_name TEXT,
+  product_barcode TEXT,
+  product_sku TEXT,
+  stock INT,
+  stock_revision BIGINT,
+  owner_id UUID,
+  owner_name TEXT,
+  owner_display_name TEXT,
+  owner_color_hex TEXT
+) AS $$
+DECLARE
+  v_query_raw TEXT;
+  v_query_alnum TEXT;
+BEGIN
+  v_query_raw := trim(COALESCE(p_query, ''));
+  IF v_query_raw = '' THEN
+    RAISE EXCEPTION 'Codigo, SKU o nombre requerido';
+  END IF;
+
+  IF p_session_id IS NULL THEN
+    RAISE EXCEPTION 'Sesion movil requerida';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM mobile_sessions
+    WHERE id = p_session_id
+      AND revoked_at IS NULL
+      AND expires_at > now()
+  ) THEN
+    RAISE EXCEPTION 'Sesion movil invalida o expirada';
+  END IF;
+
+  v_query_alnum := upper(regexp_replace(v_query_raw, '[^A-Za-z0-9]', '', 'g'));
+
+  RETURN QUERY
+  SELECT
+    p.id,
+    p.name,
+    p.barcode,
+    p.sku,
+    p.stock,
+    p.stock_revision,
+    pa.id,
+    pa.name::TEXT,
+    pa.display_name,
+    pa.color_hex
+  FROM products p
+  JOIN partners pa ON pa.id = p.owner_id
+  WHERE p.is_active = true
+    AND (
+      (
+        v_query_alnum <> ''
+        AND upper(regexp_replace(COALESCE(p.barcode, ''), '[^A-Za-z0-9]', '', 'g')) = v_query_alnum
+      )
+      OR (
+        v_query_alnum <> ''
+        AND upper(regexp_replace(COALESCE(p.sku, ''), '[^A-Za-z0-9]', '', 'g')) = v_query_alnum
+      )
+      OR p.name ILIKE '%' || v_query_raw || '%'
+    )
+  ORDER BY
+    CASE
+      WHEN (
+        v_query_alnum <> ''
+        AND upper(regexp_replace(COALESCE(p.barcode, ''), '[^A-Za-z0-9]', '', 'g')) = v_query_alnum
+      ) THEN 1
+      WHEN (
+        v_query_alnum <> ''
+        AND upper(regexp_replace(COALESCE(p.sku, ''), '[^A-Za-z0-9]', '', 'g')) = v_query_alnum
+      ) THEN 2
+      WHEN p.name ILIKE v_query_raw || '%' THEN 3
+      ELSE 4
+    END,
+    p.name
+  LIMIT 1;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+GRANT EXECUTE ON FUNCTION consume_mobile_access_code(TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION touch_mobile_session(UUID) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION issue_mobile_access_code(INT) TO authenticated;
+GRANT EXECUTE ON FUNCTION revoke_mobile_session(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION apply_stock_count_adjustment(UUID, INT, BIGINT, TEXT, TEXT, UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION find_stock_mobile_product(TEXT, UUID) TO anon, authenticated;
 
 /**
  * upsert_expense_with_allocations
@@ -664,6 +1191,10 @@ BEGIN
       sale_price = p_sale_price,
       stock = COALESCE(p_stock, 0),
       min_stock = COALESCE(p_min_stock, 0),
+      stock_revision = CASE
+        WHEN COALESCE(p_stock, 0) <> COALESCE(v_prev_stock, 0) THEN stock_revision + 1
+        ELSE stock_revision
+      END,
       is_active = COALESCE(p_is_active, true),
       updated_at = now()
     WHERE id = p_product_id;
@@ -738,6 +1269,7 @@ BEGIN
 
   UPDATE products
   SET stock = stock + v_delta,
+      stock_revision = stock_revision + 1,
       updated_at = now()
   WHERE id = p_product_id
     AND (v_delta >= 0 OR stock >= ABS(v_delta))

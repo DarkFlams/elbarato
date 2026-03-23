@@ -9,12 +9,19 @@ import { getCatalogPartners, saveCatalogProduct } from "./catalog";
 export interface MigrationExistingProduct {
   id: string;
   barcode: string;
+  sku?: string | null;
 }
 
 interface LocalProductKeyRecord {
   id: string;
   remote_id?: string | null;
   barcode: string;
+  sku?: string | null;
+}
+
+function normalizeInventoryInteger(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.trunc(value);
 }
 
 function mapRemoteProductForLocal(product: ProductWithOwner) {
@@ -75,6 +82,7 @@ export async function getMigrationExistingProductsLocalFirst(): Promise<Migratio
     return allProducts.map((product) => ({
       id: product.id,
       barcode: product.barcode,
+      sku: product.sku ?? null,
     }));
   }
 
@@ -88,6 +96,7 @@ export async function getMigrationExistingProductsLocalFirst(): Promise<Migratio
     return products.map((product) => ({
       id: product.remote_id || product.id,
       barcode: product.barcode,
+      sku: product.sku ?? null,
     }));
   } catch (error) {
     if (!isMissingTauriCommandError(error)) throw error;
@@ -96,6 +105,7 @@ export async function getMigrationExistingProductsLocalFirst(): Promise<Migratio
     return allProducts.map((product) => ({
       id: product.id,
       barcode: product.barcode,
+      sku: product.sku ?? null,
     }));
   }
 }
@@ -111,6 +121,9 @@ export async function importMigrationProductLocalFirst(input: {
   stock: number;
   minStock: number;
 }) {
+  const normalizedStock = normalizeInventoryInteger(input.stock);
+  const normalizedMinStock = normalizeInventoryInteger(input.minStock);
+
   return saveCatalogProduct({
     productId: input.productId ?? null,
     remoteId: input.productId ?? null,
@@ -122,8 +135,8 @@ export async function importMigrationProductLocalFirst(input: {
     ownerId: input.ownerId,
     purchasePrice: 0,
     salePrice: input.salePrice,
-    stock: input.stock,
-    minStock: input.minStock,
+    stock: normalizedStock,
+    minStock: normalizedMinStock,
     isActive: true,
   });
 }

@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2, Package, Plus, Save, ScanLine } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,9 @@ interface ProductFormProps {
   product?: Product | null;
   onSaved?: () => void;
   trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  showDefaultTrigger?: boolean;
 }
 
 const SIZE_SPLIT_REGEX = /[\s,;/|]+/g;
@@ -135,9 +138,12 @@ export function ProductForm({
   product,
   onSaved,
   trigger,
+  open: controlledOpen,
+  onOpenChange,
+  showDefaultTrigger = true,
 }: ProductFormProps) {
   const isEditing = !!product;
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [barcode, setBarcode] = useState("");
@@ -148,6 +154,17 @@ export function ProductForm({
   const [salePrice, setSalePrice] = useState("");
   const [stock, setStock] = useState("");
   const [minStock, setMinStock] = useState("2");
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (controlledOpen === undefined) {
+        setInternalOpen(nextOpen);
+      }
+
+      onOpenChange?.(nextOpen);
+    },
+    [controlledOpen, onOpenChange]
+  );
 
   useEffect(() => {
     if (product && open) {
@@ -281,7 +298,7 @@ export function ProductForm({
     <Dialog open={open} onOpenChange={setOpen}>
       {trigger ? (
         <DialogTrigger render={trigger as React.ReactElement} />
-      ) : (
+      ) : showDefaultTrigger ? (
         <DialogTrigger
           render={
             <Button className="border-0 bg-slate-900 text-white shadow-md shadow-slate-900/10 transition-all duration-200 hover:bg-slate-800" />
@@ -290,7 +307,7 @@ export function ProductForm({
           <Plus className="mr-2 h-4 w-4" />
           Nueva Prenda
         </DialogTrigger>
-      )}
+      ) : null}
 
       <DialogContent className="max-h-[90vh] overflow-y-auto border-slate-200 bg-white shadow-xl sm:max-w-[560px]">
         <DialogHeader>

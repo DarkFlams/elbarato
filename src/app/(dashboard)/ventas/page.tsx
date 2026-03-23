@@ -47,10 +47,18 @@ import {
 interface ExpenseWithAllocations extends Expense {
   expense_allocations: ExpenseAllocation[];
 }
-import {
-  SaleDetailDrawer,
-  type SaleDetailData,
-} from "@/components/sales/sale-detail-drawer";
+
+interface VentasPageViewState {
+  fromDate: string;
+  toDate: string;
+  activePreset: number | null;
+  selectedIndex: number | null;
+  filterPartner: string | null;
+}
+
+const VENTAS_PAGE_VIEW_STATE_KEY = "dashboard:ventas:page:v1";
+
+import type { SaleDetailData } from "@/components/sales/sale-detail-drawer";
 import { exportSalesToExcel, exportSalesToPdf, type SaleExportData } from "@/lib/export-utils";
 
 import {
@@ -67,14 +75,81 @@ export default function VentasPage() {
   const [fromDate, setFromDate] = useState(() => toEcuadorDateInput(new Date()));
   const [toDate, setToDate] = useState(() => toEcuadorDateInput(new Date()));
   const [activePreset, setActivePreset] = useState<number | null>(1);
-  const [selectedSale, setSelectedSale] = useState<SaleDetailData | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [filterPartner, setFilterPartner] = useState<string | null>(null);
+  const [viewStateRestored, setViewStateRestored] = useState(false);
 
   // Estados nuevos para Liquidación (Cintillo)
   const [partners, setPartners] = useState<Partner[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithAllocations[]>([]);
   const [showExpensesDrawer, setShowExpensesDrawer] = useState(false);
   const filterPartnerKeys = ["rosa", "lorena", "yadira", "todos"] as const;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.sessionStorage.getItem(VENTAS_PAGE_VIEW_STATE_KEY);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw) as Partial<VentasPageViewState>;
+
+      if (typeof parsed.fromDate === "string") {
+        setFromDate(parsed.fromDate);
+      }
+
+      if (typeof parsed.toDate === "string") {
+        setToDate(parsed.toDate);
+      }
+
+      if (
+        (typeof parsed.activePreset === "number" &&
+          Number.isInteger(parsed.activePreset) &&
+          parsed.activePreset > 0) ||
+        parsed.activePreset === null
+      ) {
+        setActivePreset(parsed.activePreset);
+      }
+
+      if (
+        (typeof parsed.selectedIndex === "number" &&
+          Number.isInteger(parsed.selectedIndex) &&
+          parsed.selectedIndex >= 0) ||
+        parsed.selectedIndex === null
+      ) {
+        setSelectedIndex(parsed.selectedIndex);
+      }
+
+      if (typeof parsed.filterPartner === "string" || parsed.filterPartner === null) {
+        setFilterPartner(parsed.filterPartner);
+      }
+    } catch (error) {
+      console.error("[VentasPage] state restore error:", error);
+    } finally {
+      setViewStateRestored(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!viewStateRestored || typeof window === "undefined") return;
+
+    const viewState: VentasPageViewState = {
+      fromDate,
+      toDate,
+      activePreset,
+      selectedIndex,
+      filterPartner,
+    };
+
+    try {
+      window.sessionStorage.setItem(
+        VENTAS_PAGE_VIEW_STATE_KEY,
+        JSON.stringify(viewState)
+      );
+    } catch (error) {
+      console.error("[VentasPage] state persist error:", error);
+    }
+  }, [viewStateRestored, fromDate, toDate, activePreset, selectedIndex, filterPartner]);
 
   const fetchSales = useCallback(async () => {
     setIsLoading(true);
@@ -122,8 +197,9 @@ export default function VentasPage() {
   }, [fromDate, toDate]);
 
   useEffect(() => {
-    fetchSales();
-  }, [fetchSales]);
+    if (!viewStateRestored) return;
+    void fetchSales();
+  }, [fetchSales, viewStateRestored]);
 
   const setPresetRange = (days: number) => {
     const end = new Date();
@@ -138,6 +214,7 @@ export default function VentasPage() {
     setFromDate("");
     setToDate("");
     setActivePreset(null);
+    setSelectedIndex(null);
   };
 
   const hasFilters = Boolean(fromDate || toDate);
@@ -179,12 +256,74 @@ export default function VentasPage() {
     return acc;
   }, []);
 
+  useEffect(() => {
+    if (selectedIndex === null) return;
+
+    if (filteredSales.length === 0) {
+      setSelectedIndex(null);
+      return;
+    }
+
+    if (selectedIndex >= filteredSales.length) {
+      setSelectedIndex(filteredSales.length - 1);
+    }
+  }, [filteredSales.length, selectedIndex]);
+
   const totalFilteredAmount = filteredSales.reduce((sum, s) => sum + s.displayTotal, 0);
 
+  // ==========================================
+  // Navegación por teclado
+  // ==========================================
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignorar si estamos escribiendo en un input
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
+
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault(); // Evitar scroll de la página
+
+        if (filteredSales.length === 0) return;
+
+        setSelectedIndex((prev) => {
+          if (prev === null) return 0;
+          if (e.key === "ArrowDown") {
+            return Math.min(prev + 1, filteredSales.length - 1);
+          } else {
+            return Math.max(prev - 1, 0);
+          }
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [filteredSales]);
+
+  // Auto-scroll a la fila seleccionada
+  useEffect(() => {
+    if (selectedIndex !== null) {
+      const row = document.getElementById(`sale-row-${selectedIndex}`);
+      if (row) {
+        row.scrollIntoView({ block: "nearest", behavior: "auto" });
+      }
+    }
+  }, [selectedIndex]);
+
   const getUniqueOwnersConfigs = (items: typeof sales[0]['sale_items']) => {
-    const map = new Map<string, ReturnType<typeof getPartnerConfigFromPartner>>();
+    const map = new Map<string, ReturnType<typeof getPartnerConfig>>();
     items.forEach(item => {
-      const conf = getPartnerConfigFromPartner(item.partner);
+      // item.partner en sale_items suele ser el nombre en string, no un objeto
+      const partnerName =
+        typeof item.partner === "string"
+          ? item.partner
+          : typeof item.partner === "object" &&
+              item.partner !== null &&
+              "name" in item.partner &&
+              typeof item.partner.name === "string"
+            ? item.partner.name
+            : "";
+      const conf = getPartnerConfig({ name: partnerName });
+      
       if (conf.displayName && conf.displayName !== "Sin nombre" && !map.has(conf.key)) {
         map.set(conf.key, conf);
       }
@@ -495,7 +634,8 @@ export default function VentasPage() {
                 </tr>
               </thead>
               <tbody className="bg-white">
-                {filteredSales.map((sale) => {
+                {filteredSales.map((sale, index) => {
+                  const uniqueOwners = getUniqueOwnersConfigs(sale.displayItems);
                   const totalItems = sale.displayItems.reduce((sum, item) => sum + item.quantity, 0);
                   
                   // Resumen de productos sin el prefijo de cantidad
@@ -506,14 +646,40 @@ export default function VentasPage() {
                     productsSummary = productsSummary.substring(0, 50) + "...";
                   }
 
+                  // Construir gradiente multicolor para la barra lateral
+                  const ownerColors = uniqueOwners.length > 0
+                    ? uniqueOwners.map((c) => c.color)
+                    : ["#cbd5e1"]; // slate-300 fallback
+                  const barStyle: React.CSSProperties = ownerColors.length === 1
+                    ? { backgroundColor: ownerColors[0] }
+                    : {
+                        background: `linear-gradient(to bottom, ${ownerColors
+                          .map((c, i) => {
+                            const start = (i / ownerColors.length) * 100;
+                            const end = ((i + 1) / ownerColors.length) * 100;
+                            return `${c} ${start}%, ${c} ${end}%`;
+                          })
+                          .join(", ")})`,
+                      };
+
+                  const isSelected = index === selectedIndex;
+
                   return (
                     <tr
+                      id={`sale-row-${index}`}
                       key={sale.id}
-                      onClick={() => setSelectedSale(sale)}
-                      className="group transition-colors hover:bg-slate-50 border-b border-slate-100/60 cursor-pointer"
+                      onClick={() => setSelectedIndex(index)}
+                      className={`group transition-colors border-b border-slate-100/60 cursor-pointer ${
+                        isSelected ? "bg-indigo-50/60" : "hover:bg-slate-50"
+                      }`}
                     >
-                      <td className="px-4 py-1.5 align-middle">
-                        <span className="block font-mono text-[11px] font-medium text-slate-800 uppercase group-hover:text-amber-700 transition-colors">
+                      <td className="px-4 py-1.5 align-middle relative">
+                        {/* Barra vertical sutil (2px) como en carrito */}
+                        <div
+                          className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-md"
+                          style={barStyle}
+                        />
+                        <span className="block font-mono text-[11px] font-medium text-slate-800 uppercase group-hover:text-amber-700 transition-colors ml-1">
                           #{sale.id.slice(0, 8)}
                         </span>
                       </td>
@@ -565,18 +731,6 @@ export default function VentasPage() {
         </div>
         )}
       </div>
-
-      {/* Drawer Detalle */}
-      {selectedSale && (
-        <SaleDetailDrawer
-          sale={selectedSale}
-          onClose={() => setSelectedSale(null)}
-          onPrint={() => {
-            // Placeholder: Call window.print or generate PDF specific to ticket component
-            alert("Función de impresión en desarrollo");
-          }}
-        />
-      )}
 
       {/* Drawer Metadatos de Gastos */}
       <Dialog open={showExpensesDrawer} onOpenChange={setShowExpensesDrawer}>

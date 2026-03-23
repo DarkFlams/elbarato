@@ -48,6 +48,11 @@ interface ProductQuery {
   offset?: number;
 }
 
+const SEARCH_MIN_TOKEN_LENGTH = 2;
+const SEARCH_FETCH_MULTIPLIER = 6;
+const SEARCH_MIN_CANDIDATES = 200;
+const SEARCH_MAX_CANDIDATES = 1200;
+
 interface ProductCounts {
   totalCount: number;
   outCount: number;
@@ -154,6 +159,256 @@ function mapRemotePartner(data: Partner[]): LocalPartnerRecord[] {
   });
 }
 
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeSearchTerm(value: string): string[] {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  return normalized.split(" ").filter(Boolean);
+}
+
+function normalizeCodeKey(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function isLikelyExactCodeQuery(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return false;
+  if (trimmed.length < 2 || trimmed.length > 32) return false;
+  return /\d/.test(trimmed);
+}
+
+function isExactBarcodeOrSkuMatch(product: Pick<ProductWithOwner, "barcode" | "sku">, query: string) {
+  const queryCode = normalizeCodeKey(query);
+  if (!queryCode) return false;
+
+  return (
+    normalizeCodeKey(product.barcode) === queryCode ||
+    normalizeCodeKey(product.sku) === queryCode
+  );
+}
+
+function getSearchableProductText(product: ProductWithOwner) {
+  return normalizeSearchText(`${product.name} ${product.barcode} ${product.sku ?? ""}`);
+}
+
+function splitWords(value: string) {
+  return value.split(" ").filter(Boolean);
+}
+
+function hasAllRequiredTokens(searchableText: string, tokens: string[]) {
+  const requiredTokens = tokens.filter(
+    (token) => token.length >= SEARCH_MIN_TOKEN_LENGTH
+  );
+  if (requiredTokens.length === 0) return true;
+  return requiredTokens.every((token) => searchableText.includes(token));
+}
+
+function scoreOrderedWordPrefixMatch(words: string[], tokens: string[]) {
+  if (words.length === 0 || tokens.length === 0) return 0;
+
+  let cursor = 0;
+  let score = 0;
+  let gapPenalty = 0;
+
+  for (const token of tokens) {
+    let foundAt = -1;
+    for (let index = cursor; index < words.length; index += 1) {
+      if (words[index].startsWith(token)) {
+        foundAt = index;
+        break;
+      }
+    }
+
+    if (foundAt === -1) {
+      return 0;
+    }
+
+    if (token.length >= 3) {
+      score += 150;
+    } else if (token.length === 2) {
+      score += 110;
+    } else {
+      score += 70;
+    }
+
+    gapPenalty += Math.max(0, foundAt - cursor);
+    cursor = foundAt + 1;
+  }
+
+  score += 500;
+  score -= gapPenalty * 60;
+  return Math.max(score, 0);
+}
+
+function scoreProductByIntent(product: ProductWithOwner, rawQuery: string, tokens: string[]) {
+  const normalizedQuery = normalizeSearchText(rawQuery);
+  const normalizedName = normalizeSearchText(product.name);
+  const normalizedBarcode = normalizeSearchText(product.barcode);
+  const normalizedSku = normalizeSearchText(product.sku ?? "");
+  const searchableText = getSearchableProductText(product);
+  const searchableWords = splitWords(searchableText);
+  const nameWords = splitWords(normalizedName);
+  const rankingTokens = tokens.filter(Boolean);
+  const requiredTokens = rankingTokens.filter(
+    (token) => token.length >= SEARCH_MIN_TOKEN_LENGTH
+  );
+
+  let score = 0;
+
+  const compactQuery = normalizeCodeKey(rawQuery);
+  const compactBarcode = normalizeCodeKey(normalizedBarcode);
+  const compactSku = normalizeCodeKey(normalizedSku);
+
+  if (compactQuery && (compactBarcode === compactQuery || compactSku === compactQuery)) {
+    // El match exacto por codigo/SKU siempre debe ganar sobre coincidencias parciales.
+    score += 5000;
+  }
+  if (normalizedName === normalizedQuery) {
+    score += 900;
+  }
+  if (normalizedName.startsWith(normalizedQuery)) {
+    score += 700;
+  }
+  if (normalizedQuery && searchableText.includes(normalizedQuery)) {
+    score += 500;
+  }
+  if (
+    requiredTokens.length > 1 &&
+    requiredTokens.every((token) => searchableText.includes(token))
+  ) {
+    score += 400;
+  }
+
+  score += scoreOrderedWordPrefixMatch(nameWords, rankingTokens);
+
+  for (const token of requiredTokens) {
+    if (searchableWords.some((word) => word.startsWith(token))) {
+      score += 70;
+    } else if (searchableText.includes(token)) {
+      score += 30;
+    }
+  }
+
+  if (product.stock > 0) {
+    score += 10;
+  }
+
+  return score;
+}
+
+function buildSearchPattern(search: string): string | null {
+  const normalized = search
+    .trim()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return null;
+  return `%${normalized.split(" ").join("%")}%`;
+}
+
+export async function searchCatalogProductsByIntent(
+  filters: ProductQuery = {}
+): Promise<ProductWithOwner[]> {
+  const search = filters.search?.trim();
+  if (!search) {
+    return getCatalogProducts(filters);
+  }
+
+  const limit = Math.max(filters.limit ?? 50, 1);
+  const offset = Math.max(filters.offset ?? 0, 0);
+  const neededWindow = offset + limit;
+  const candidateLimit = Math.min(
+    Math.max(neededWindow * SEARCH_FETCH_MULTIPLIER, SEARCH_MIN_CANDIDATES),
+    SEARCH_MAX_CANDIDATES
+  );
+
+  const tokens = tokenizeSearchTerm(search);
+  const uniqueTokens = Array.from(new Set(tokens));
+  const tokenQueries =
+    uniqueTokens.length > 1
+      ? uniqueTokens.filter((token) => token.length >= SEARCH_MIN_TOKEN_LENGTH)
+      : [];
+
+  const sharedFilters: ProductQuery = {
+    ownerId: filters.ownerId ?? null,
+    stockFilter: filters.stockFilter ?? "all",
+    limit: candidateLimit,
+    offset: 0,
+  };
+
+  const searches = [search, ...tokenQueries];
+  const datasets = await Promise.all(
+    searches.map((term) =>
+      getCatalogProducts({
+        ...sharedFilters,
+        search: term,
+      })
+    )
+  );
+
+  const merged = new Map<string, ProductWithOwner>();
+  for (const dataset of datasets) {
+    for (const product of dataset) {
+      merged.set(product.id, product);
+    }
+  }
+
+  if (isLikelyExactCodeQuery(search)) {
+    const hasExactInCandidates = Array.from(merged.values()).some((product) =>
+      isExactBarcodeOrSkuMatch(product, search)
+    );
+
+    if (!hasExactInCandidates) {
+      try {
+        const exactByCode = await findCatalogProductByBarcode(search);
+        if (exactByCode) {
+          merged.set(exactByCode.id, exactByCode);
+        }
+      } catch (error) {
+        console.warn("[catalog] exact code lookup failed:", error);
+      }
+    }
+  }
+
+  const ranked = Array.from(merged.values())
+    .map((product) => {
+      const searchableText = getSearchableProductText(product);
+      return {
+        product,
+        searchableText,
+        score: scoreProductByIntent(product, search, uniqueTokens),
+      };
+    })
+    .filter(({ searchableText }) => hasAllRequiredTokens(searchableText, uniqueTokens))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.product.name.localeCompare(right.product.name, "es", {
+        sensitivity: "base",
+      });
+    })
+    .map(({ product }) => product);
+
+  if (ranked.length === 0) {
+    return [];
+  }
+
+  return ranked.slice(offset, offset + limit);
+}
+
 async function hydratePartnersFromSupabase() {
   const supabase = createClient();
   const { data, error } = await supabase.from("partners").select("*").order("name");
@@ -189,9 +444,10 @@ async function hydrateProductsFromSupabase(filters?: ProductQuery) {
   }
 
   if (filters?.search?.trim()) {
-    const search = filters.search.trim().replace(/[,"]/g, " ");
-    const term = `%${search}%`;
-    query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+    const term = buildSearchPattern(filters.search);
+    if (term) {
+      query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+    }
   }
 
   const { data, error } = await query.order("name").limit(5000);
@@ -260,9 +516,10 @@ export async function getCatalogProducts(filters: ProductQuery = {}) {
 
     if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
     if (filters.search?.trim()) {
-      const search = filters.search.trim().replace(/[,"]/g, " ");
-      const term = `%${search}%`;
-      query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      const term = buildSearchPattern(filters.search);
+      if (term) {
+        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      }
     }
 
     const { data, error } = await query.order("name").range(filters.offset || 0, (filters.offset || 0) + ((filters.limit || 50) - 1));
@@ -337,9 +594,10 @@ export async function getCatalogProducts(filters: ProductQuery = {}) {
 
     if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
     if (filters.search?.trim()) {
-      const search = filters.search.trim().replace(/[,"]/g, " ");
-      const term = `%${search}%`;
-      query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      const term = buildSearchPattern(filters.search);
+      if (term) {
+        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      }
     }
 
     const { data, error: remoteError } = await query
@@ -370,8 +628,10 @@ export async function getCatalogProductCounts(filters: Pick<ProductQuery, "searc
 
     if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
     if (filters.search?.trim()) {
-      const term = `%${filters.search.trim().replace(/[,"]/g, " ")}%`;
-      query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      const term = buildSearchPattern(filters.search);
+      if (term) {
+        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      }
     }
 
     const { data, error } = await query.limit(5000);
@@ -409,8 +669,10 @@ export async function getCatalogProductCounts(filters: Pick<ProductQuery, "searc
 
     if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
     if (filters.search?.trim()) {
-      const term = `%${filters.search.trim().replace(/[,"]/g, " ")}%`;
-      query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      const term = buildSearchPattern(filters.search);
+      if (term) {
+        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+      }
     }
 
     const { data, error: remoteError } = await query.limit(5000);

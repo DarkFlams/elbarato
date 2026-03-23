@@ -43,6 +43,127 @@ interface BodegaProduct {
   } | null;
 }
 
+const SEARCH_MIN_TOKEN_LENGTH = 2;
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeSearchTerm(value: string): string[] {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  return normalized.split(" ").filter(Boolean);
+}
+
+function getProductSearchableText(product: BodegaProduct) {
+  return normalizeSearchText(`${product.name} ${product.barcode} ${product.sku ?? ""}`);
+}
+
+function splitWords(value: string) {
+  return value.split(" ").filter(Boolean);
+}
+
+function hasAllRequiredTokens(text: string, tokens: string[]) {
+  const required = tokens.filter((token) => token.length >= SEARCH_MIN_TOKEN_LENGTH);
+  if (required.length === 0) return true;
+  return required.every((token) => text.includes(token));
+}
+
+function scoreOrderedWordPrefixMatch(words: string[], tokens: string[]) {
+  if (words.length === 0 || tokens.length === 0) return 0;
+
+  let cursor = 0;
+  let score = 0;
+  let gapPenalty = 0;
+
+  for (const token of tokens) {
+    let foundAt = -1;
+    for (let index = cursor; index < words.length; index += 1) {
+      if (words[index].startsWith(token)) {
+        foundAt = index;
+        break;
+      }
+    }
+
+    if (foundAt === -1) return 0;
+
+    if (token.length >= 3) {
+      score += 150;
+    } else if (token.length === 2) {
+      score += 110;
+    } else {
+      score += 70;
+    }
+
+    gapPenalty += Math.max(0, foundAt - cursor);
+    cursor = foundAt + 1;
+  }
+
+  score += 500;
+  score -= gapPenalty * 60;
+  return Math.max(score, 0);
+}
+
+function scoreBodegaProduct(product: BodegaProduct, rawQuery: string, tokens: string[]) {
+  const normalizedQuery = normalizeSearchText(rawQuery);
+  const normalizedName = normalizeSearchText(product.name);
+  const normalizedBarcode = normalizeSearchText(product.barcode);
+  const normalizedSku = normalizeSearchText(product.sku ?? "");
+  const searchableText = getProductSearchableText(product);
+  const searchableWords = splitWords(searchableText);
+  const nameWords = splitWords(normalizedName);
+  const rankingTokens = tokens.filter(Boolean);
+  const requiredTokens = rankingTokens.filter(
+    (token) => token.length >= SEARCH_MIN_TOKEN_LENGTH
+  );
+
+  let score = 0;
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  const compactBarcode = normalizedBarcode.replace(/\s+/g, "");
+  const compactSku = normalizedSku.replace(/\s+/g, "");
+
+  if (compactQuery && (compactBarcode === compactQuery || compactSku === compactQuery)) {
+    score += 1200;
+  }
+  if (normalizedName === normalizedQuery) {
+    score += 900;
+  }
+  if (normalizedName.startsWith(normalizedQuery)) {
+    score += 700;
+  }
+  if (normalizedQuery && searchableText.includes(normalizedQuery)) {
+    score += 500;
+  }
+  if (
+    requiredTokens.length > 1 &&
+    requiredTokens.every((token) => searchableText.includes(token))
+  ) {
+    score += 400;
+  }
+
+  score += scoreOrderedWordPrefixMatch(nameWords, rankingTokens);
+
+  for (const token of requiredTokens) {
+    if (searchableWords.some((word) => word.startsWith(token))) {
+      score += 70;
+    } else if (searchableText.includes(token)) {
+      score += 30;
+    }
+  }
+
+  if (product.stock > 0) {
+    score += 10;
+  }
+
+  return score;
+}
+
 function getAgingLabel(bodegaAt: string | null): { text: string; color: string } | null {
   if (!bodegaAt) return null;
   const days = Math.floor(
@@ -85,17 +206,30 @@ export default function BodegaPage() {
     fetchBodega();
   }, [fetchBodega]);
 
-  // Filter locally
-  const filteredProducts = search.length >= 2
-    ? products.filter((p) => {
-        const term = search.toLowerCase();
-        return (
-          p.name.toLowerCase().includes(term) ||
-          p.barcode.toLowerCase().includes(term) ||
-          (p.sku && p.sku.toLowerCase().includes(term))
-        );
-      })
-    : products;
+  // Filter + rank by search intent
+  const searchTokens = tokenizeSearchTerm(search);
+  const filteredProducts =
+    search.length >= 2
+      ? products
+          .map((product) => {
+            const searchableText = getProductSearchableText(product);
+            return {
+              product,
+              score: scoreBodegaProduct(product, search, searchTokens),
+              matches: hasAllRequiredTokens(searchableText, searchTokens),
+            };
+          })
+          .filter((entry) => entry.matches)
+          .sort((left, right) => {
+            if (right.score !== left.score) {
+              return right.score - left.score;
+            }
+            return left.product.name.localeCompare(right.product.name, "es", {
+              sensitivity: "base",
+            });
+          })
+          .map((entry) => entry.product)
+      : products;
 
   // ── Create remate ──
   const handleRemate = async () => {

@@ -1,11 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "POS Tienda de Ropa",
-  "version": "0.1.4",
+  "version": "0.1.8",
   "identifier": "com.elbarato.pos",
   "build": {
     "frontendDist": "../out",
-    "devUrl": "http://127.0.0.1:4310",
+    "devUrl": "http://127.0.0.1:4310/caja?desktop=1",
     "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tauri-before-dev.ps1",
     "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tauri-before-build.ps1"
   },

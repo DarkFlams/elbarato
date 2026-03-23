@@ -10,9 +10,38 @@ import { Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { playSuccessSound } from "@/lib/audio";
 import { useCart } from "@/hooks/use-cart";
-import { getCatalogProducts } from "@/lib/local/catalog";
+import {
+  findCatalogProductByBarcode,
+  searchCatalogProductsByIntent,
+} from "@/lib/local/catalog";
 import { Input } from "@/components/ui/input";
 import type { ProductWithOwner } from "@/types/database";
+
+function normalizeCodeKey(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function findExactCodeMatch(products: ProductWithOwner[], query: string) {
+  const normalizedQuery = normalizeCodeKey(query);
+  if (!normalizedQuery) return null;
+
+  return (
+    products.find(
+      (product) =>
+        normalizeCodeKey(product.barcode) === normalizedQuery ||
+        normalizeCodeKey(product.sku) === normalizedQuery
+    ) ?? null
+  );
+}
+
+function shouldTryExactCodeLookup(value: string) {
+  const searchTerm = value.trim();
+  if (!searchTerm || /\s/.test(searchTerm)) return false;
+  if (searchTerm.length < 2 || searchTerm.length > 32) return false;
+  return /\d/.test(searchTerm);
+}
 
 export function ProductSearch() {
   const [query, setQuery] = useState("");
@@ -22,6 +51,21 @@ export function ProductSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { addItem } = useCart();
+
+  const searchProducts = async (
+    rawQuery: string,
+    limit: number
+  ): Promise<ProductWithOwner[]> => {
+    const searchTerm = rawQuery.trim();
+    if (!searchTerm) return [];
+
+    return searchCatalogProductsByIntent({
+      search: searchTerm,
+      limit,
+      offset: 0,
+      stockFilter: "all",
+    });
+  };
 
   useEffect(() => {
     if (query.length < 2) {
@@ -33,12 +77,7 @@ export function ProductSearch() {
     const timer = window.setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data = await getCatalogProducts({
-          search: query.trim(),
-          limit: 8,
-          offset: 0,
-          stockFilter: "all",
-        });
+        const data = await searchProducts(query, 8);
 
         setResults(data);
         setIsOpen(true);
@@ -97,17 +136,30 @@ export function ProductSearch() {
       const searchTerm = query.trim();
       if (!searchTerm) return;
 
+      const exactResult = findExactCodeMatch(results, searchTerm);
+      if (exactResult) {
+        handleSelect(exactResult);
+        return;
+      }
+
+      if (shouldTryExactCodeLookup(searchTerm)) {
+        try {
+          const exactByCode = await findCatalogProductByBarcode(searchTerm);
+          if (exactByCode) {
+            handleSelect(exactByCode);
+            return;
+          }
+        } catch (error) {
+          console.error("[ProductSearch] exact code lookup error:", error);
+        }
+      }
+
       if (!isSearching && results.length > 0) {
         handleSelect(results[0]);
       } else {
         setIsSearching(true);
         try {
-          const data = await getCatalogProducts({
-            search: searchTerm,
-            limit: 8,
-            offset: 0,
-            stockFilter: "all",
-          });
+          const data = await searchProducts(searchTerm, 8);
           
           if (data.length > 0) {
             handleSelect(data[0]);
@@ -129,9 +181,16 @@ export function ProductSearch() {
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <Input
           ref={inputRef}
+          id="pos-product-search-input"
+          name="pos-product-search"
+          type="text"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           placeholder="Buscar producto por nombre o codigo..."
           className="h-9 border-slate-200 bg-white pl-9 pr-8 text-sm shadow-sm transition-colors focus:border-indigo-500 focus:ring-indigo-500/20"
         />
@@ -190,7 +249,7 @@ export function ProductSearch() {
 
       {isOpen && results.length === 0 && !isSearching && query.length >= 2 && (
         <div className="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white p-4 text-center text-sm text-slate-500 shadow-lg">
-          No se encontraron productos para "{query}"
+          No se encontraron productos para &quot;{query}&quot;
         </div>
       )}
     </div>
