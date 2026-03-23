@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packageJsonPath = Join-Path $projectRoot "package.json"
+$tauriConfigPath = Join-Path $projectRoot "src-tauri\tauri.conf.json"
 $bundlePath = Join-Path $projectRoot "src-tauri\target\release\bundle\nsis"
 
 function Get-AuthToken {
@@ -151,10 +152,13 @@ function Test-GitHubCliAuth {
 Set-Location $projectRoot
 
 $ghPath = Get-GitHubCliPath
-$version = (Get-Content -Raw $packageJsonPath | ConvertFrom-Json).version
+$packageJson = Get-Content -Raw $packageJsonPath | ConvertFrom-Json
+$tauriConfig = Get-Content -Raw $tauriConfigPath | ConvertFrom-Json
+$version = $packageJson.version
 $tag = "v$version"
-$releaseName = "POS Tienda de Ropa v$version"
-$defaultNotes = "Actualizacion $version de POS Tienda de Ropa."
+$productName = $tauriConfig.productName
+$releaseName = "$productName v$version"
+$defaultNotes = "Actualizacion $version de $productName."
 $releaseNotes = $defaultNotes
 
 if ($NotesFile) {
@@ -176,9 +180,23 @@ if ($NotesFile) {
   & (Join-Path $PSScriptRoot "generate-updater-assets.ps1") -NotesFile $NotesFile
 }
 
+$installerAsset = Get-ChildItem $bundlePath -Filter "*setup.exe" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+if (-not $installerAsset) {
+  throw ("Falta artefacto para publicar: no se encontro ningun setup.exe en {0}. Ejecuta npm run tauri:build primero." -f $bundlePath)
+}
+
+$signatureAsset = Get-Item ("{0}.sig" -f $installerAsset.FullName) -ErrorAction SilentlyContinue
+
+if (-not $signatureAsset) {
+  throw ("Falta artefacto para publicar: no se encontro la firma {0}. Ejecuta npm run tauri:build primero." -f ("{0}.sig" -f $installerAsset.FullName))
+}
+
 $requiredAssets = @(
-  (Join-Path $bundlePath ("POS Tienda de Ropa_{0}_x64-setup.exe" -f $version)),
-  (Join-Path $bundlePath ("POS Tienda de Ropa_{0}_x64-setup.exe.sig" -f $version)),
+  $installerAsset.FullName,
+  $signatureAsset.FullName,
   (Join-Path $bundlePath "latest.json")
 )
 
