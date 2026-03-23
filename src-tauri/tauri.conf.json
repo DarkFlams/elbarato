@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "POS Tienda de Ropa",
-  "version": "0.1.9",
+  "productName": "El Barato",
+  "version": "0.1.11",
   "identifier": "com.elbarato.pos",
   "build": {
     "frontendDist": "../out",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "POS Tienda de Ropa",
+        "title": "El Barato",
         "width": 1366,
         "height": 768,
         "minWidth": 1024,
