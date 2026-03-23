@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
@@ -31,8 +30,6 @@ import {
   CloudOff,
   CloudDownload,
   LogOut,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
   Printer,
   Smartphone,
@@ -40,7 +37,6 @@ import {
   PanelLeft,
   PanelLeftClose,
 } from "lucide-react";
-import { APP_NAME } from "@/lib/constants";
 import { OfflineSyncIndicator } from "@/components/offline/offline-sync-indicator";
 import { LocalCatalogGate } from "@/components/offline/local-catalog-gate";
 import { isAuthBypassEnabled } from "@/lib/auth-mode";
@@ -50,7 +46,7 @@ const navigation = [
   {
     label: "Caja",
     items: [
-      { title: "Terminal POS", href: "/caja", icon: ScanBarcode },
+      { title: "Punto de Venta", href: "/caja", icon: ScanBarcode },
       { title: "Historial de Tickets", href: "/ventas", icon: ShoppingBag },
       { title: "Gastos Diarios", href: "/gastos", icon: Wallet },
     ],
@@ -112,11 +108,11 @@ function AppSidebar() {
       <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2 border-b border-transparent transition-all">
         <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-slate-800 to-slate-930 shadow-md ring-1 ring-slate-900/10 transition-all">
-            <span className="font-sans font-bold text-[16px] group-data-[collapsible=icon]:text-[14px] text-white tracking-tighter leading-none transition-all">D'</span>
+            <span className="font-sans font-bold text-[16px] group-data-[collapsible=icon]:text-[14px] text-white tracking-tighter leading-none transition-all">D&apos;</span>
           </div>
           <div className="flex flex-col flex-1 group-data-[collapsible=icon]:hidden overflow-hidden">
             <span className="truncate text-[14px] font-extrabold text-slate-900 tracking-tight leading-tight">
-              D'Lorens & El Barato
+              D&apos;Lorens & El Barato
             </span>
             <span className="truncate text-[9px] font-semibold text-slate-500 uppercase tracking-widest mt-0.5">
               Administración
