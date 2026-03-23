@@ -37,14 +37,18 @@ export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
       }
 
       setStatus("syncing");
-      setMessage("Descargando catalogo inicial a esta PC...");
+      setMessage(
+        state.seeded
+          ? "Actualizando catalogo local con precios y datos nuevos..."
+          : "Descargando catalogo inicial a esta PC..."
+      );
 
       const result = await ensureInitialLocalCatalog((next) => {
         setProgress({ processed: next.processed, total: next.total });
         setMessage(
           next.stage === "partners"
             ? "Descargando socias a la base local..."
-            : "Descargando inventario completo a la base local..."
+            : "Descargando inventario completo y lista de precios a la base local..."
         );
       });
 
@@ -55,8 +59,8 @@ export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
 
       if (result.requiresInternet) {
         setStatus("blocked");
-        setMessage("Esta PC todavia no tiene el catalogo completo.");
-        setDetail("Conectate a internet una vez para descargar socios, productos y stock a la base local.");
+        setMessage("Esta PC necesita actualizar el catalogo local.");
+        setDetail("Conectate a internet una vez para descargar socias, productos, stock y precios tier a la base local.");
         return;
       }
 
@@ -71,7 +75,11 @@ export function LocalCatalogGate({ children }: LocalCatalogGateProps) {
   }, []);
 
   useEffect(() => {
-    void bootstrap();
+    const timer = window.setTimeout(() => {
+      void bootstrap();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [bootstrap]);
 
   if (status === "ready") {

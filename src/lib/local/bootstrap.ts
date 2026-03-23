@@ -22,6 +22,8 @@ interface BootstrapProgress {
   total: number;
 }
 
+const LOCAL_CATALOG_BOOTSTRAP_VERSION = "2";
+
 export interface LocalCatalogBootstrapResult {
   ready: boolean;
   seeded: boolean;
@@ -144,14 +146,18 @@ export async function getLocalCatalogBootstrapState(): Promise<LocalCatalogBoots
     };
   }
 
-  const [seededSetting, productKeys] = await Promise.all([
+  const [seededSetting, bootstrapVersionSetting, productKeys] = await Promise.all([
     getLocalAppSetting("catalog_seeded"),
+    getLocalAppSetting("catalog_bootstrap_version"),
     getLocalProductKeys(),
   ]);
 
   const seeded = seededSetting?.value === "1";
+  const versionMatches =
+    bootstrapVersionSetting?.value === LOCAL_CATALOG_BOOTSTRAP_VERSION;
+
   return {
-    ready: seeded && productKeys.length > 0,
+    ready: seeded && versionMatches && productKeys.length > 0,
     seeded,
     requiresInternet: false,
     productCount: productKeys.length,
@@ -218,6 +224,7 @@ export async function ensureInitialLocalCatalog(
 
   await Promise.all([
     setLocalAppSetting("catalog_seeded", "1"),
+    setLocalAppSetting("catalog_bootstrap_version", LOCAL_CATALOG_BOOTSTRAP_VERSION),
     setLocalAppSetting("catalog_seeded_at", new Date().toISOString()),
     setLocalAppSetting("catalog_seed_count", String(processed)),
   ]);

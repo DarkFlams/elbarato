@@ -162,7 +162,9 @@ export function ProductSearch() {
     }
 
     resetSearch();
-    inputRef.current?.blur();
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
   };
 
   const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
