@@ -251,10 +251,12 @@ export default function DashboardLayout({
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <main className="flex h-screen flex-col overflow-hidden p-2.5 lg:p-3 2xl:p-4">
+        <main className="flex h-screen min-h-0 flex-col overflow-hidden p-2.5 lg:p-3 2xl:p-4">
           <DashboardAuthGate>
             <OfflineSyncIndicator />
-            <LocalCatalogGate>{children}</LocalCatalogGate>
+            <div className="flex min-h-0 flex-1 flex-col">
+              <LocalCatalogGate>{children}</LocalCatalogGate>
+            </div>
           </DashboardAuthGate>
         </main>
       </SidebarInset>
