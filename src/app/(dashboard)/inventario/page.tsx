@@ -66,7 +66,7 @@ export default function InventarioPage() {
   };
 
   return (
-    <div className="flex flex-col h-full gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -84,7 +84,7 @@ export default function InventarioPage() {
       </div>
 
       {/* Productos */}
-      <div className="flex-1 min-h-0">
+      <div className="flex min-h-0 flex-1 flex-col">
         <ProductTable
           partners={partners}
           refreshTrigger={refreshTrigger}

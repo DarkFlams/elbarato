@@ -331,7 +331,7 @@ export function ProductTable({
   };
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="space-y-3 border-b border-slate-100 px-4 py-3">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -491,7 +491,7 @@ export function ProductTable({
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {isLoading ? (
           <div className="flex flex-1 flex-col items-center justify-center text-slate-400">
             <RefreshCw className="mb-4 h-8 w-8 animate-spin text-slate-300" />
@@ -513,7 +513,7 @@ export function ProductTable({
           </div>
         ) : (
           <>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="flex-1 min-h-0">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50 sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                   <tr>
