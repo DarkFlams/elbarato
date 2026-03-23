@@ -36,6 +36,7 @@ import {
   Loader2,
   Printer,
   Smartphone,
+  Tags,
 } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
 import { OfflineSyncIndicator } from "@/components/offline/offline-sync-indicator";
@@ -56,6 +57,7 @@ const navigation = [
     label: "Gestion",
     items: [
       { title: "Inventario", href: "/inventario", icon: Package },
+      { title: "Lista de Precios", href: "/precios", icon: Tags },
       { title: "Altas y Bajas", href: "/inventario/movimientos", icon: ArrowUpDown },
       { title: "Stock Movil", href: "/stock-movil", icon: Smartphone },
       { title: "Migracion", href: "/inventario/migracion", icon: Database },

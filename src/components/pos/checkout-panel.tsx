@@ -76,7 +76,8 @@ export function CheckoutPanel({ cashSession }: CheckoutPanelProps) {
       const salePayload = items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
-        unit_price: item.unit_price,
+        unit_price: item.price_override,
+        price_tier: item.price_tier,
       }));
 
       const registerResult = await registerSaleWithOfflineFallback({

@@ -22,6 +22,9 @@ interface LocalBodegaProductRecord {
   barcode: string;
   sku: string | null;
   sale_price: number;
+  sale_price_x3: number | null;
+  sale_price_x6: number | null;
+  sale_price_x12: number | null;
   stock: number;
   bodega_stock: number;
   bodega_at: string | null;
@@ -49,6 +52,9 @@ function mapRemoteBodegaProducts(data: ProductWithOwner[]): LocalBodegaProductRe
     barcode: product.barcode,
     sku: product.sku,
     sale_price: product.sale_price,
+    sale_price_x3: product.sale_price_x3,
+    sale_price_x6: product.sale_price_x6,
+    sale_price_x12: product.sale_price_x12,
     stock: product.stock,
     bodega_stock: product.bodega_stock,
     bodega_at: product.bodega_at,

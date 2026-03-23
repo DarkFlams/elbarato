@@ -9,6 +9,7 @@ import {
   markSyncQueueItemSyncedLocalFirst,
   type LocalSyncQueueItem,
 } from "@/lib/local/sync-queue";
+import type { PriceTier } from "@/types/database";
 
 interface LocalPartnerKey {
   id: string;
@@ -33,6 +34,7 @@ interface RegisterLocalSalePayload {
     productId: string;
     quantity: number;
     unitPrice: number;
+    priceTier?: PriceTier;
   }>;
   notes?: string | null;
   amountReceived?: number | null;
@@ -62,6 +64,9 @@ interface UpsertLocalProductPayload {
   ownerId: string;
   purchasePrice: number;
   salePrice: number;
+  salePriceX3?: number | null;
+  salePriceX6?: number | null;
+  salePriceX12?: number | null;
   stock: number;
   minStock: number;
   isActive: boolean;
@@ -297,6 +302,7 @@ async function syncSaleItem(item: LocalSyncQueueItem, state: SyncReferenceState)
     product_id: resolveRequiredRemoteId(state.productRemoteIds, row.productId, "El producto"),
     quantity: Number(row.quantity),
     unit_price: Number(row.unitPrice),
+    price_tier: row.priceTier ?? "normal",
   }));
 
   const { data, error } = await supabase.rpc("register_sale", {
@@ -399,6 +405,18 @@ async function syncProductItem(item: LocalSyncQueueItem, state: SyncReferenceSta
       p_owner_id: remoteOwnerId,
       p_purchase_price: Number(payload.purchasePrice ?? 0),
       p_sale_price: Number(payload.salePrice),
+      p_sale_price_x3:
+        payload.salePriceX3 === null || payload.salePriceX3 === undefined
+          ? null
+          : Number(payload.salePriceX3),
+      p_sale_price_x6:
+        payload.salePriceX6 === null || payload.salePriceX6 === undefined
+          ? null
+          : Number(payload.salePriceX6),
+      p_sale_price_x12:
+        payload.salePriceX12 === null || payload.salePriceX12 === undefined
+          ? null
+          : Number(payload.salePriceX12),
       p_stock: Number(payload.stock),
       p_min_stock: Number(payload.minStock),
       p_is_active: payload.isActive,

@@ -8,6 +8,7 @@ export interface RegisterSaleRpcParams {
     product_id: string;
     quantity: number;
     unit_price: number;
+    price_tier?: "normal" | "x3" | "x6" | "x12" | "manual";
   }>;
   p_notes: string | null;
   p_amount_received: number | null;

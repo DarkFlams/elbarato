@@ -100,7 +100,7 @@ export function SaleTicket({
               <p className="text-[10px] font-medium">{item.name}</p>
               <div className="flex justify-between pl-2 text-[10px] text-gray-600">
                 <span>
-                  {item.quantity} x ${item.unit_price.toFixed(2)}
+                  {item.quantity} x ${item.price_override.toFixed(2)}
                 </span>
                 <span>${item.subtotal.toFixed(2)}</span>
               </div>

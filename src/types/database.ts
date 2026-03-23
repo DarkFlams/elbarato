@@ -18,6 +18,7 @@ export type TransactionType = "sale" | "expense";
 export type ExpenseScope = "individual" | "shared";
 export type CashSessionStatus = "open" | "closed";
 export type PaymentMethod = "cash" | "transfer";
+export type PriceTier = "normal" | "x3" | "x6" | "x12" | "manual";
 export type InventoryMovementReason =
   | "sale"
   | "manual_adjustment"
@@ -51,6 +52,9 @@ export interface Product {
   owner_id: string;
   purchase_price: number;
   sale_price: number;
+  sale_price_x3: number | null;
+  sale_price_x6: number | null;
+  sale_price_x12: number | null;
   stock: number;
   min_stock: number;
   stock_revision?: number;
@@ -107,6 +111,7 @@ export interface SaleItem {
   owner_id: string;
   quantity: number;
   unit_price: number;
+  price_tier: PriceTier;
   subtotal: number;
   created_at: string;
 }
@@ -172,6 +177,7 @@ export interface CashSessionReport {
 
 /** Item en el carrito de venta */
 export interface CartItem {
+  id: string;
   product_id: string;
   barcode: string;
   sku?: string | null;
@@ -181,7 +187,12 @@ export interface CartItem {
   owner_display_name: string;
   owner_color: string;
   available_stock: number;
+  sale_price: number;
+  sale_price_x3: number | null;
+  sale_price_x6: number | null;
+  sale_price_x12: number | null;
   unit_price: number;
+  price_tier: PriceTier;
   price_override: number;
   quantity: number;
   subtotal: number;
@@ -189,8 +200,14 @@ export interface CartItem {
 
 export interface CartMutationResult {
   ok: boolean;
-  reason?: "out_of_stock" | "quantity_limit" | "not_found";
+  reason?:
+    | "out_of_stock"
+    | "quantity_limit"
+    | "not_found"
+    | "price_tier_unavailable";
   availableStock?: number;
+  appliedPrice?: number;
+  appliedTier?: PriceTier;
 }
 
 /** Resumen de ventas agrupadas por socia */

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { getPartnerConfigFromPartner } from "@/lib/partners";
+import { getTierLabel } from "@/lib/pricing";
 import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 export interface SaleDetailItem {
@@ -18,6 +19,7 @@ export interface SaleDetailItem {
   product_name: string;
   quantity: number;
   unit_price: number;
+  price_tier?: string;
   subtotal: number;
   owner_id: string;
   partner: {
@@ -181,6 +183,11 @@ export function SaleDetailDrawer({
                               <span className="truncate text-[11px] font-semibold text-slate-800 leading-tight block max-w-[200px]">
                                 {item.product_name}
                               </span>
+                              {item.price_tier && item.price_tier !== "normal" && (
+                                <span className="mt-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
+                                  {getTierLabel(item.price_tier as "normal" | "x3" | "x6" | "x12" | "manual")}
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-2 py-1.5 text-right align-middle">

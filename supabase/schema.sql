@@ -50,6 +50,9 @@ CREATE TABLE products (
   owner_id UUID NOT NULL REFERENCES partners(id),
   purchase_price NUMERIC(10,2) NOT NULL DEFAULT 0,
   sale_price NUMERIC(10,2) NOT NULL,
+  sale_price_x3 NUMERIC(10,2),
+  sale_price_x6 NUMERIC(10,2),
+  sale_price_x12 NUMERIC(10,2),
   stock INT NOT NULL DEFAULT 0,
   min_stock INT NOT NULL DEFAULT 0,
   stock_revision BIGINT NOT NULL DEFAULT 1,
@@ -59,6 +62,9 @@ CREATE TABLE products (
   updated_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT products_purchase_price_nonnegative CHECK (purchase_price >= 0),
   CONSTRAINT products_sale_price_positive CHECK (sale_price > 0),
+  CONSTRAINT products_sale_price_x3_nonnegative CHECK (sale_price_x3 IS NULL OR sale_price_x3 >= 0),
+  CONSTRAINT products_sale_price_x6_nonnegative CHECK (sale_price_x6 IS NULL OR sale_price_x6 >= 0),
+  CONSTRAINT products_sale_price_x12_nonnegative CHECK (sale_price_x12 IS NULL OR sale_price_x12 >= 0),
   CONSTRAINT products_stock_nonnegative CHECK (stock >= 0),
   CONSTRAINT products_min_stock_nonnegative CHECK (min_stock >= 0),
   CONSTRAINT products_stock_revision_positive CHECK (stock_revision > 0)
@@ -122,10 +128,12 @@ CREATE TABLE sale_items (
   owner_id UUID NOT NULL REFERENCES partners(id),
   quantity INT NOT NULL DEFAULT 1,
   unit_price NUMERIC(10,2) NOT NULL,
+  price_tier TEXT NOT NULL DEFAULT 'normal',
   subtotal NUMERIC(10,2) NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT sale_items_quantity_positive CHECK (quantity > 0),
   CONSTRAINT sale_items_unit_price_nonnegative CHECK (unit_price >= 0),
+  CONSTRAINT sale_items_price_tier_valid CHECK (price_tier IN ('normal', 'x3', 'x6', 'x12', 'manual')),
   CONSTRAINT sale_items_subtotal_nonnegative CHECK (subtotal >= 0)
 );
 

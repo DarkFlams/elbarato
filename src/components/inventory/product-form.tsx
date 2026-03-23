@@ -107,6 +107,9 @@ async function upsertProductRemote(input: {
   description?: string | null;
   ownerId: string;
   salePrice: number;
+  salePriceX3?: number | null;
+  salePriceX6?: number | null;
+  salePriceX12?: number | null;
   stock: number;
   minStock: number;
 }) {
@@ -120,6 +123,9 @@ async function upsertProductRemote(input: {
     p_owner_id: input.ownerId,
     p_purchase_price: 0,
     p_sale_price: input.salePrice,
+    p_sale_price_x3: input.salePriceX3 ?? null,
+    p_sale_price_x6: input.salePriceX6 ?? null,
+    p_sale_price_x12: input.salePriceX12 ?? null,
     p_stock: input.stock,
     p_min_stock: input.minStock,
     p_is_active: true,
@@ -152,6 +158,9 @@ export function ProductForm({
   const [sizesText, setSizesText] = useState("");
   const [ownerId, setOwnerId] = useState<string>("");
   const [salePrice, setSalePrice] = useState("");
+  const [salePriceX3, setSalePriceX3] = useState("");
+  const [salePriceX6, setSalePriceX6] = useState("");
+  const [salePriceX12, setSalePriceX12] = useState("");
   const [stock, setStock] = useState("");
   const [minStock, setMinStock] = useState("2");
   const open = controlledOpen ?? internalOpen;
@@ -174,6 +183,9 @@ export function ProductForm({
       setName(product.name);
       setOwnerId(product.owner_id);
       setSalePrice(String(product.sale_price));
+      setSalePriceX3(product.sale_price_x3 !== null ? String(product.sale_price_x3) : "");
+      setSalePriceX6(product.sale_price_x6 !== null ? String(product.sale_price_x6) : "");
+      setSalePriceX12(product.sale_price_x12 !== null ? String(product.sale_price_x12) : "");
       setStock(String(product.stock));
       setMinStock(String(product.min_stock));
       setSizesText(parsedSizes.join(" "));
@@ -192,8 +204,23 @@ export function ProductForm({
     setSizesText("");
     setOwnerId("");
     setSalePrice("");
+    setSalePriceX3("");
+    setSalePriceX6("");
+    setSalePriceX12("");
     setStock("");
     setMinStock("2");
+  };
+
+  const parseOptionalPrice = (raw: string, label: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    const parsed = parseFloat(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`Ingresa un ${label} valido`);
+    }
+
+    return parsed;
   };
 
   const handleSubmit = async () => {
@@ -230,6 +257,9 @@ export function ProductForm({
       }
 
       const parsedSalePrice = parseFloat(salePrice);
+      const parsedSalePriceX3 = parseOptionalPrice(salePriceX3, "precio x3");
+      const parsedSalePriceX6 = parseOptionalPrice(salePriceX6, "precio x6");
+      const parsedSalePriceX12 = parseOptionalPrice(salePriceX12, "precio x12");
       const parsedStock = parseInt(stock, 10) || 0;
       const parsedMinStock = parseInt(minStock, 10) || 0;
       const finalBarcode = isEditing ? barcode : await generateUniqueBarcode();
@@ -246,6 +276,9 @@ export function ProductForm({
         ownerId,
         purchasePrice: 0,
         salePrice: parsedSalePrice,
+        salePriceX3: parsedSalePriceX3,
+        salePriceX6: parsedSalePriceX6,
+        salePriceX12: parsedSalePriceX12,
         stock: parsedStock,
         minStock: parsedMinStock,
         isActive: true,
@@ -259,6 +292,9 @@ export function ProductForm({
           description: finalDescription,
           ownerId,
           salePrice: parsedSalePrice,
+          salePriceX3: parsedSalePriceX3,
+          salePriceX6: parsedSalePriceX6,
+          salePriceX12: parsedSalePriceX12,
           stock: parsedStock,
           minStock: parsedMinStock,
         });
@@ -418,7 +454,7 @@ export function ProductForm({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="prod-sale">Precio venta ($) *</Label>
               <Input
@@ -429,6 +465,45 @@ export function ProductForm({
                 value={salePrice}
                 onChange={(event) => setSalePrice(event.target.value)}
                 placeholder="0.00"
+                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="prod-sale-x3">PVP x3</Label>
+              <Input
+                id="prod-sale-x3"
+                type="number"
+                step="0.01"
+                min="0"
+                value={salePriceX3}
+                onChange={(event) => setSalePriceX3(event.target.value)}
+                placeholder="Opcional"
+                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="prod-sale-x6">PVP x6</Label>
+              <Input
+                id="prod-sale-x6"
+                type="number"
+                step="0.01"
+                min="0"
+                value={salePriceX6}
+                onChange={(event) => setSalePriceX6(event.target.value)}
+                placeholder="Opcional"
+                className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="prod-sale-x12">PVP x12</Label>
+              <Input
+                id="prod-sale-x12"
+                type="number"
+                step="0.01"
+                min="0"
+                value={salePriceX12}
+                onChange={(event) => setSalePriceX12(event.target.value)}
+                placeholder="Opcional"
                 className="border-slate-200 bg-white font-mono shadow-sm focus-visible:border-slate-900 focus-visible:ring-slate-900/10"
               />
             </div>

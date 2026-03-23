@@ -72,6 +72,10 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x3 NUMERIC(10,2);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x6 NUMERIC(10,2);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x12 NUMERIC(10,2);
+ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS price_tier TEXT DEFAULT 'normal';
 ALTER TABLE partners ADD COLUMN IF NOT EXISTS is_expense_eligible BOOLEAN NOT NULL DEFAULT TRUE;
 
 UPDATE partners
@@ -82,6 +86,9 @@ WHERE name = 'todos';
 
 UPDATE products SET purchase_price = 0 WHERE purchase_price < 0;
 UPDATE products SET sale_price = 0.01 WHERE sale_price <= 0;
+UPDATE products SET sale_price_x3 = NULL WHERE sale_price_x3 < 0;
+UPDATE products SET sale_price_x6 = NULL WHERE sale_price_x6 < 0;
+UPDATE products SET sale_price_x12 = NULL WHERE sale_price_x12 < 0;
 UPDATE products SET stock = 0 WHERE stock < 0;
 UPDATE products SET min_stock = 0 WHERE min_stock < 0;
 
@@ -101,6 +108,11 @@ WHERE quantity <= 0;
 UPDATE sale_items
 SET unit_price = 0
 WHERE unit_price < 0;
+
+UPDATE sale_items
+SET price_tier = 'normal'
+WHERE price_tier IS NULL
+   OR price_tier NOT IN ('normal', 'x3', 'x6', 'x12', 'manual');
 
 UPDATE sale_items
 SET subtotal = ROUND(quantity * unit_price, 2)
@@ -129,6 +141,21 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_price_positive') THEN
     ALTER TABLE products
     ADD CONSTRAINT products_sale_price_positive CHECK (sale_price > 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_price_x3_nonnegative') THEN
+    ALTER TABLE products
+    ADD CONSTRAINT products_sale_price_x3_nonnegative CHECK (sale_price_x3 IS NULL OR sale_price_x3 >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_price_x6_nonnegative') THEN
+    ALTER TABLE products
+    ADD CONSTRAINT products_sale_price_x6_nonnegative CHECK (sale_price_x6 IS NULL OR sale_price_x6 >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_price_x12_nonnegative') THEN
+    ALTER TABLE products
+    ADD CONSTRAINT products_sale_price_x12_nonnegative CHECK (sale_price_x12 IS NULL OR sale_price_x12 >= 0);
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_stock_nonnegative') THEN
@@ -179,6 +206,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sale_items_unit_price_nonnegative') THEN
     ALTER TABLE sale_items
     ADD CONSTRAINT sale_items_unit_price_nonnegative CHECK (unit_price >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sale_items_price_tier_valid') THEN
+    ALTER TABLE sale_items
+    ADD CONSTRAINT sale_items_price_tier_valid CHECK (price_tier IN ('normal', 'x3', 'x6', 'x12', 'manual'));
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sale_items_subtotal_nonnegative') THEN

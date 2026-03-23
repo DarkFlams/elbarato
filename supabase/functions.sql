@@ -11,6 +11,15 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x3 NUMERIC(10,2);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x6 NUMERIC(10,2);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x12 NUMERIC(10,2);
+ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS price_tier TEXT DEFAULT 'normal';
+
+UPDATE sale_items
+SET price_tier = 'normal'
+WHERE price_tier IS NULL
+   OR trim(price_tier) = '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_idempotency_key
 ON sales(idempotency_key)
@@ -83,7 +92,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
  *   {
  *     "product_id": "uuid",
  *     "quantity": 2,
- *     "unit_price": 15.50
+ *     "unit_price": 15.50,
+ *     "price_tier": "normal"
  *   }
  * ]
  */
@@ -113,6 +123,7 @@ DECLARE
   v_product RECORD;
   v_quantity INT;
   v_unit_price NUMERIC(10,2);
+  v_price_tier TEXT;
   v_existing_sale_id UUID;
   v_existing_total NUMERIC(10,2);
   v_existing_item_count INT;
@@ -184,6 +195,7 @@ BEGIN
 
     v_quantity := COALESCE((v_item->>'quantity')::INT, 0);
     v_unit_price := ROUND(COALESCE((v_item->>'unit_price')::NUMERIC, 0), 2);
+    v_price_tier := lower(trim(COALESCE(v_item->>'price_tier', 'normal')));
 
     IF v_quantity <= 0 THEN
       RAISE EXCEPTION 'Cantidad invalida para el producto %', v_item->>'product_id';
@@ -191,6 +203,10 @@ BEGIN
 
     IF v_unit_price < 0 THEN
       RAISE EXCEPTION 'Precio invalido para el producto %', v_item->>'product_id';
+    END IF;
+
+    IF v_price_tier NOT IN ('normal', 'x3', 'x6', 'x12', 'manual') THEN
+      RAISE EXCEPTION 'Tier de precio invalido para el producto %', v_item->>'product_id';
     END IF;
 
     SELECT
@@ -279,6 +295,7 @@ BEGIN
   LOOP
     v_quantity := (v_item->>'quantity')::INT;
     v_unit_price := ROUND((v_item->>'unit_price')::NUMERIC, 2);
+    v_price_tier := lower(trim(COALESCE(v_item->>'price_tier', 'normal')));
 
     SELECT
       id,
@@ -308,6 +325,7 @@ BEGIN
       owner_id,
       quantity,
       unit_price,
+      price_tier,
       subtotal
     )
     VALUES (
@@ -318,6 +336,7 @@ BEGIN
       v_product.owner_id,
       v_quantity,
       v_unit_price,
+      v_price_tier,
       ROUND(v_quantity * v_unit_price, 2)
     );
 
@@ -1066,6 +1085,11 @@ SET search_path = public;
  * Crea o actualiza un producto y registra movimiento de inventario
  * en la misma transaccion.
  */
+DROP FUNCTION IF EXISTS upsert_product_with_movement(UUID, TEXT, TEXT, TEXT, TEXT, UUID, NUMERIC, NUMERIC, INT, INT, BOOLEAN, TEXT);
+DROP FUNCTION IF EXISTS upsert_product_with_movement(UUID, TEXT, TEXT, TEXT, TEXT, UUID, NUMERIC, NUMERIC, INT, INT, BOOLEAN, TEXT);
+DROP FUNCTION IF EXISTS upsert_product_with_movement(UUID, TEXT, TEXT, TEXT, TEXT, UUID, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, INT, INT, BOOLEAN, TEXT);
+DROP FUNCTION IF EXISTS upsert_product_with_movement(UUID, TEXT, TEXT, TEXT, TEXT, UUID, NUMERIC, NUMERIC, INT, INT, BOOLEAN, TEXT, NUMERIC, NUMERIC, NUMERIC);
+
 CREATE OR REPLACE FUNCTION upsert_product_with_movement(
   p_product_id UUID,
   p_barcode TEXT,
@@ -1078,7 +1102,10 @@ CREATE OR REPLACE FUNCTION upsert_product_with_movement(
   p_stock INT,
   p_min_stock INT,
   p_is_active BOOLEAN DEFAULT true,
-  p_sku TEXT DEFAULT NULL
+  p_sku TEXT DEFAULT NULL,
+  p_sale_price_x3 NUMERIC(10,2) DEFAULT NULL,
+  p_sale_price_x6 NUMERIC(10,2) DEFAULT NULL,
+  p_sale_price_x12 NUMERIC(10,2) DEFAULT NULL
 )
 RETURNS TABLE (
   product_id UUID,
@@ -1113,6 +1140,18 @@ BEGIN
     RAISE EXCEPTION 'Precio de venta invalido';
   END IF;
 
+  IF p_sale_price_x3 IS NOT NULL AND p_sale_price_x3 < 0 THEN
+    RAISE EXCEPTION 'Precio x3 invalido';
+  END IF;
+
+  IF p_sale_price_x6 IS NOT NULL AND p_sale_price_x6 < 0 THEN
+    RAISE EXCEPTION 'Precio x6 invalido';
+  END IF;
+
+  IF p_sale_price_x12 IS NOT NULL AND p_sale_price_x12 < 0 THEN
+    RAISE EXCEPTION 'Precio x12 invalido';
+  END IF;
+
   IF COALESCE(p_stock, 0) < 0 THEN
     RAISE EXCEPTION 'Stock invalido';
   END IF;
@@ -1131,6 +1170,9 @@ BEGIN
       owner_id,
       purchase_price,
       sale_price,
+      sale_price_x3,
+      sale_price_x6,
+      sale_price_x12,
       stock,
       min_stock,
       is_active
@@ -1144,6 +1186,9 @@ BEGIN
       p_owner_id,
       COALESCE(p_purchase_price, 0),
       p_sale_price,
+      p_sale_price_x3,
+      p_sale_price_x6,
+      p_sale_price_x12,
       COALESCE(p_stock, 0),
       COALESCE(p_min_stock, 0),
       COALESCE(p_is_active, true)
@@ -1189,6 +1234,9 @@ BEGIN
       owner_id = p_owner_id,
       purchase_price = COALESCE(p_purchase_price, 0),
       sale_price = p_sale_price,
+      sale_price_x3 = p_sale_price_x3,
+      sale_price_x6 = p_sale_price_x6,
+      sale_price_x12 = p_sale_price_x12,
       stock = COALESCE(p_stock, 0),
       min_stock = COALESCE(p_min_stock, 0),
       stock_revision = CASE

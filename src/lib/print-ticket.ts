@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { APP_NAME } from "@/lib/constants";
 import { getSavedTicketPrinterName } from "@/lib/local/printers";
+import { getTierLabel } from "@/lib/pricing";
 import { isTauriRuntime } from "@/lib/tauri-runtime";
 import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
@@ -107,7 +108,9 @@ function buildItemsText(items: CartItem[]) {
     const nameLines = wrapText(item.name.toLowerCase(), LINE_WIDTH);
     lines.push(...nameLines);
 
-    const qtyPrice = `${item.quantity} x ${formatMoney(item.unit_price)}`;
+    const tierSuffix =
+      item.price_tier === "normal" ? "" : ` ${getTierLabel(item.price_tier)}`;
+    const qtyPrice = `${item.quantity} x ${formatMoney(item.price_override)}${tierSuffix}`;
     const subtotal = formatMoney(item.subtotal);
     lines.push(padLine(qtyPrice, subtotal));
   }

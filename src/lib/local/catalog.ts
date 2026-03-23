@@ -27,6 +27,9 @@ interface LocalProductWithOwnerRecord {
   owner_id?: string;
   purchase_price?: number;
   sale_price?: number;
+  sale_price_x3?: number | null;
+  sale_price_x6?: number | null;
+  sale_price_x12?: number | null;
   stock?: number;
   min_stock?: number;
   image_url?: string | null;
@@ -76,6 +79,9 @@ interface UpsertLocalProductInput {
   ownerId: string;
   purchasePrice: number;
   salePrice: number;
+  salePriceX3?: number | null;
+  salePriceX6?: number | null;
+  salePriceX12?: number | null;
   stock: number;
   minStock: number;
   isActive: boolean;

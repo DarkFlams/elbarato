@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { registerSaleWithOfflineFallback } from "@/lib/offline/rpc";
 import { createClient } from "@/lib/supabase/client";
 import { isMissingTauriCommandError, isTauriRuntime } from "@/lib/tauri-runtime";
+import type { PriceTier } from "@/types/database";
 
 interface RegisterSaleLocalFirstInput {
   cashSessionId: string;
@@ -12,6 +13,7 @@ interface RegisterSaleLocalFirstInput {
     productId: string;
     quantity: number;
     unitPrice: number;
+    priceTier: PriceTier;
   }>;
   notes?: string | null;
   amountReceived?: number | null;
@@ -46,6 +48,7 @@ export async function registerSaleLocalFirst(input: RegisterSaleLocalFirstInput)
         product_id: item.productId,
         quantity: item.quantity,
         unit_price: item.unitPrice,
+        price_tier: item.priceTier,
       })),
       p_notes: input.notes ?? null,
       p_amount_received: input.amountReceived ?? null,
@@ -93,6 +96,7 @@ export async function registerSaleLocalFirst(input: RegisterSaleLocalFirstInput)
         product_id: item.productId,
         quantity: item.quantity,
         unit_price: item.unitPrice,
+        price_tier: item.priceTier,
       })),
       p_notes: input.notes ?? null,
       p_amount_received: input.amountReceived ?? null,

@@ -23,6 +23,7 @@ import { useCashSession } from "@/hooks/use-cash-session";
 import { playErrorSound, playSuccessSound } from "@/lib/audio";
 import { Cart } from "@/components/pos/cart";
 import { ExpensesPanel } from "@/components/pos/expenses-panel";
+import { PriceTierSelector } from "@/components/pos/price-tier-selector";
 import { ProductSearch } from "@/components/pos/product-search";
 import { SessionStats } from "@/components/pos/session-stats";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +69,12 @@ export default function CajaPage() {
 
         if (!result.ok) {
           playErrorSound();
+          if (result.reason === "price_tier_unavailable") {
+            toast.error(`Falta precio ${result.appliedTier ?? "seleccionado"}`, {
+              description: `${product.name} no tiene configurado ese tier.`,
+            });
+            return;
+          }
           toast.warning(`No puedes agregar mas de ${product.name}`, {
             description: `Error: ${result.reason}`,
           });
@@ -78,6 +85,10 @@ export default function CajaPage() {
         if (product.stock <= 0) {
           toast.warning(`${product.name} agregado sin stock`, {
             description: "Se vendera en negativo.",
+          });
+        } else if (result.appliedPrice !== undefined) {
+          toast.success(`${product.name} agregado`, {
+            description: `$${result.appliedPrice.toFixed(2)} - ${result.appliedTier ?? "normal"}`,
           });
         }
       } catch (error) {
@@ -97,6 +108,10 @@ export default function CajaPage() {
           <div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm">
             <div className="flex-1">
               <ProductSearch />
+            </div>
+
+            <div className="hidden md:block">
+              <PriceTierSelector />
             </div>
 
             {lastScanned && (
@@ -123,6 +138,10 @@ export default function CajaPage() {
                   ? "Dia operativo listo"
                   : "Reintentando dia actual..."}
             </Badge>
+          </div>
+
+          <div className="md:hidden">
+            <PriceTierSelector />
           </div>
 
           <div className="min-h-0 flex-1">

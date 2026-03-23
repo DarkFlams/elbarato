@@ -80,6 +80,7 @@ export function Cart() {
         product_id: item.product_id,
         quantity: item.quantity,
         unit_price: item.price_override,
+        price_tier: item.price_tier,
       }));
 
       const registerResult = await registerSaleLocalFirst({
@@ -89,6 +90,7 @@ export function Cart() {
           productId: item.product_id,
           quantity: item.quantity,
           unitPrice: item.unit_price,
+          priceTier: item.price_tier,
         })),
         notes: notes.trim() || null,
         amountReceived:
@@ -267,7 +269,7 @@ export function Cart() {
             <tbody className="bg-white">
               {items.map((item, index) => (
                 <CartItemRow
-                  key={item.product_id}
+                  key={item.id}
                   item={item}
                   index={index}
                 />

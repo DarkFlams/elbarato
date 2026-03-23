@@ -10,6 +10,7 @@ import { Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { playSuccessSound } from "@/lib/audio";
 import { useCart } from "@/hooks/use-cart";
+import { getPriceForTier, getTierLabel } from "@/lib/pricing";
 import {
   findCatalogProductByBarcode,
   searchCatalogProductsByIntent,
@@ -50,7 +51,7 @@ export function ProductSearch() {
   const [isOpen, setIsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { addItem } = useCart();
+  const { addItem, selectedPriceTier } = useCart();
 
   const searchProducts = async (
     rawQuery: string,
@@ -105,6 +106,13 @@ export function ProductSearch() {
   const handleSelect = (product: ProductWithOwner) => {
     const result = addItem(product);
     if (!result.ok) {
+      if (result.reason === "price_tier_unavailable") {
+        toast.error(`${product.name} no tiene precio ${getTierLabel(selectedPriceTier)}`, {
+          description: "Selecciona otro tier o completa la lista de precios.",
+        });
+        return;
+      }
+
       toast.warning(`No puedes agregar mas de ${product.name}`, {
         description: `Error: ${result.reason}`,
       });
@@ -119,7 +127,9 @@ export function ProductSearch() {
       });
     } else {
       toast.success(`${product.name} agregado`, {
-        description: `${product.owner.display_name} - $${product.sale_price.toFixed(2)}`,
+        description: `${product.owner.display_name} - $${(
+          result.appliedPrice ?? product.sale_price
+        ).toFixed(2)} - ${getTierLabel(result.appliedTier ?? selectedPriceTier)}`,
       });
     }
 
@@ -216,33 +226,45 @@ export function ProductSearch() {
       {isOpen && results.length > 0 && (
         <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           {results.map((product) => (
-            <button
-              key={product.id}
-              onClick={() => handleSelect(product)}
-              className="flex w-full items-center border-b border-slate-100 px-3 py-2 text-left transition-colors hover:bg-slate-50 last:border-0"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-slate-900">{product.name}</p>
-                <p className="text-xs text-slate-500">
-                  <span
-                    className="mr-1 inline-block h-2 w-2 rounded-full"
-                    style={{ backgroundColor: product.owner.color_hex }}
-                  />
-                  {product.owner.display_name} - {product.barcode}
-                  {product.stock <= 0 && (
-                    <span className="ml-2 text-red-400">Sin stock</span>
-                  )}
-                  {product.stock > 0 && product.stock <= product.min_stock && (
-                    <span className="ml-2 text-yellow-500">Stock: {product.stock}</span>
-                  )}
-                </p>
-              </div>
+            (() => {
+              const tierPrice = getPriceForTier(product, selectedPriceTier);
+              const tierUnavailable =
+                tierPrice === null || tierPrice === undefined || tierPrice <= 0;
 
-              <div className="ml-3 text-right">
-                <p className="font-mono text-sm font-semibold">${product.sale_price.toFixed(2)}</p>
-                <p className="text-xs text-slate-500">Stock: {product.stock}</p>
-              </div>
-            </button>
+              return (
+                <button
+                  key={product.id}
+                  onClick={() => handleSelect(product)}
+                  className="flex w-full items-center border-b border-slate-100 px-3 py-2 text-left transition-colors hover:bg-slate-50 last:border-0"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900">{product.name}</p>
+                    <p className="text-xs text-slate-500">
+                      <span
+                        className="mr-1 inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: product.owner.color_hex }}
+                      />
+                      {product.owner.display_name} - {product.barcode}
+                      {product.stock <= 0 && (
+                        <span className="ml-2 text-red-400">Sin stock</span>
+                      )}
+                      {product.stock > 0 && product.stock <= product.min_stock && (
+                        <span className="ml-2 text-yellow-500">Stock: {product.stock}</span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="ml-3 text-right">
+                    <p className="font-mono text-sm font-semibold">
+                      {tierUnavailable ? "--" : `$${tierPrice.toFixed(2)}`}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {getTierLabel(selectedPriceTier)}
+                    </p>
+                  </div>
+                </button>
+              );
+            })()
           ))}
         </div>
       )}

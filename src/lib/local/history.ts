@@ -28,6 +28,7 @@ interface LocalSaleHistoryItem {
   product_name: string;
   quantity: number;
   unit_price: number;
+  price_tier?: string;
   subtotal: number;
   owner_id: string;
   partner: LocalPartnerRecord | null;
@@ -69,6 +70,7 @@ function normalizeSale(sale: LocalSaleHistory): SaleDetailData {
       product_name: item.product_name,
       quantity: Number(item.quantity || 0),
       unit_price: Number(item.unit_price || 0),
+      price_tier: item.price_tier || "normal",
       subtotal: Number(item.subtotal || 0),
       owner_id: item.partner?.remote_id || item.partner?.id || item.owner_id,
       partner: item.partner
@@ -115,6 +117,7 @@ async function getSalesHistoryRemote(fromDate?: string, toDate?: string) {
         product_name,
         quantity,
         unit_price,
+        price_tier,
         subtotal,
         owner_id,
         partner:partners!sale_items_owner_id_fkey (

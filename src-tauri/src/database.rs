@@ -23,7 +23,7 @@ use windows_sys::Win32::{
 };
 
 const DB_FILE_NAME: &str = "pos_tienda_local.db3";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const MIGRATIONS_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS products (
   owner_remote_id TEXT,
   purchase_price REAL NOT NULL DEFAULT 0,
   sale_price REAL NOT NULL DEFAULT 0,
+  sale_price_x3 REAL,
+  sale_price_x6 REAL,
+  sale_price_x12 REAL,
   stock INTEGER NOT NULL DEFAULT 0,
   min_stock INTEGER NOT NULL DEFAULT 0,
   image_url TEXT,
@@ -125,6 +128,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
   owner_id TEXT NOT NULL,
   quantity INTEGER NOT NULL,
   unit_price REAL NOT NULL,
+  price_tier TEXT NOT NULL DEFAULT 'normal',
   subtotal REAL NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   synced_at TEXT,
@@ -251,6 +255,9 @@ pub struct LocalProduct {
     pub owner_id: String,
     pub purchase_price: f64,
     pub sale_price: f64,
+    pub sale_price_x3: Option<f64>,
+    pub sale_price_x6: Option<f64>,
+    pub sale_price_x12: Option<f64>,
     pub stock: i64,
     pub min_stock: i64,
     pub image_url: Option<String>,
@@ -313,6 +320,9 @@ pub struct UpsertLocalProductInput {
     pub owner_id: String,
     pub purchase_price: f64,
     pub sale_price: f64,
+    pub sale_price_x3: Option<f64>,
+    pub sale_price_x6: Option<f64>,
+    pub sale_price_x12: Option<f64>,
     pub stock: i64,
     pub min_stock: i64,
     pub is_active: bool,
@@ -384,12 +394,18 @@ pub struct UpsertLocalExpenseResult {
     pub allocation_count: i64,
 }
 
+fn default_price_tier() -> String {
+    "normal".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterLocalSaleItemInput {
     pub product_id: String,
     pub quantity: i64,
     pub unit_price: f64,
+    #[serde(default = "default_price_tier")]
+    pub price_tier: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -428,6 +444,7 @@ pub struct LocalSaleHistoryItem {
     pub product_name: String,
     pub quantity: i64,
     pub unit_price: f64,
+    pub price_tier: String,
     pub subtotal: f64,
     pub owner_id: String,
     pub partner: Option<LocalPartner>,
@@ -499,6 +516,9 @@ pub struct LocalBodegaProduct {
     pub barcode: String,
     pub sku: Option<String>,
     pub sale_price: f64,
+    pub sale_price_x3: Option<f64>,
+    pub sale_price_x6: Option<f64>,
+    pub sale_price_x12: Option<f64>,
     pub stock: i64,
     pub bodega_stock: i64,
     pub bodega_at: Option<String>,
@@ -595,6 +615,8 @@ pub fn initialize_database(app: &AppHandle) -> Result<DatabaseState, String> {
       })?;
     }
 
+    apply_incremental_sqlite_migrations(&connection)?;
+
     connection
         .execute(
             "INSERT INTO app_settings (key, value) VALUES ('schema_version', ?1)
@@ -604,6 +626,87 @@ pub fn initialize_database(app: &AppHandle) -> Result<DatabaseState, String> {
         .map_err(|error| format!("No se pudo registrar schema_version local: {error}"))?;
 
     Ok(DatabaseState { db_path })
+}
+
+fn sqlite_table_has_column(
+    connection: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool, String> {
+    let pragma_sql = format!("PRAGMA table_info({table_name})");
+    let mut statement = connection
+        .prepare(&pragma_sql)
+        .map_err(|error| format!("No se pudo inspeccionar columnas de {table_name}: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("No se pudieron leer columnas de {table_name}: {error}"))?;
+
+    for row in rows {
+        let current = row
+            .map_err(|error| format!("No se pudo mapear columna de {table_name}: {error}"))?;
+        if current == column_name {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn ensure_sqlite_column(
+    connection: &Connection,
+    table_name: &str,
+    column_name: &str,
+    alter_sql: &str,
+) -> Result<(), String> {
+    if sqlite_table_has_column(connection, table_name, column_name)? {
+        return Ok(());
+    }
+
+    connection
+        .execute(alter_sql, [])
+        .map_err(|error| format!("No se pudo agregar columna {table_name}.{column_name}: {error}"))?;
+
+    Ok(())
+}
+
+fn apply_incremental_sqlite_migrations(connection: &Connection) -> Result<(), String> {
+    ensure_sqlite_column(
+        connection,
+        "products",
+        "sale_price_x3",
+        "ALTER TABLE products ADD COLUMN sale_price_x3 REAL",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "products",
+        "sale_price_x6",
+        "ALTER TABLE products ADD COLUMN sale_price_x6 REAL",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "products",
+        "sale_price_x12",
+        "ALTER TABLE products ADD COLUMN sale_price_x12 REAL",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "sale_items",
+        "price_tier",
+        "ALTER TABLE sale_items ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'normal'",
+    )?;
+
+    connection
+        .execute(
+            "UPDATE sale_items
+       SET price_tier = 'normal'
+       WHERE price_tier IS NULL
+          OR TRIM(price_tier) = ''",
+            [],
+        )
+        .map_err(|error| format!("No se pudo normalizar price_tier local: {error}"))?;
+
+    Ok(())
 }
 
 fn backup_and_reset_incompatible_database(db_path: &PathBuf) -> Result<(), String> {
@@ -708,6 +811,9 @@ fn map_product_with_owner(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalProd
             owner_id: row.get("owner_local_id")?,
             purchase_price: row.get("purchase_price")?,
             sale_price: row.get("sale_price")?,
+            sale_price_x3: row.get("sale_price_x3")?,
+            sale_price_x6: row.get("sale_price_x6")?,
+            sale_price_x12: row.get("sale_price_x12")?,
             stock: row.get("stock")?,
             min_stock: row.get("min_stock")?,
             image_url: row.get("image_url")?,
@@ -759,6 +865,9 @@ SELECT
   p.category,
   p.purchase_price,
   p.sale_price,
+  p.sale_price_x3,
+  p.sale_price_x6,
+  p.sale_price_x12,
   p.stock,
   p.min_stock,
   p.image_url,
@@ -1856,6 +1965,15 @@ pub fn register_local_sale(
             return Err("Precio invalido en uno de los items".to_string());
         }
 
+        if item.price_tier != "normal"
+            && item.price_tier != "x3"
+            && item.price_tier != "x6"
+            && item.price_tier != "x12"
+            && item.price_tier != "manual"
+        {
+            return Err("Price tier invalido en uno de los items".to_string());
+        }
+
         total += item.unit_price * item.quantity as f64;
         item_count += item.quantity;
     }
@@ -1918,8 +2036,8 @@ pub fn register_local_sale(
             .execute(
                 "INSERT INTO sale_items (
            local_id, remote_id, sale_local_id, sale_remote_id, product_local_id, product_remote_id,
-           product_name, product_barcode, owner_id, quantity, unit_price, subtotal
-         ) VALUES (?1, NULL, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+           product_name, product_barcode, owner_id, quantity, unit_price, price_tier, subtotal
+         ) VALUES (?1, NULL, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     Uuid::new_v4().to_string(),
                     sale_local_id,
@@ -1930,6 +2048,7 @@ pub fn register_local_sale(
                     owner_id,
                     item.quantity,
                     item.unit_price,
+                    item.price_tier,
                     ((item.unit_price * item.quantity as f64) * 100.0).round() / 100.0
                 ],
             )
@@ -2082,6 +2201,7 @@ pub fn list_local_sales(
            si.product_name,
            si.quantity,
            si.unit_price,
+           si.price_tier,
            si.subtotal,
            p.local_id,
            p.remote_id,
@@ -2098,15 +2218,15 @@ pub fn list_local_sales(
 
         let item_rows = item_statement
             .query_map(params![sale_local_id.clone()], |item_row| {
-                let partner_local_id: Option<String> = item_row.get(5)?;
+                let partner_local_id: Option<String> = item_row.get(6)?;
                 let partner = if let Some(local_id) = partner_local_id {
                     Some(LocalPartner {
                         id: local_id,
-                        remote_id: item_row.get::<_, Option<String>>(6)?,
-                        name: item_row.get::<_, String>(7)?,
-                        display_name: item_row.get::<_, String>(8)?,
-                        color_hex: item_row.get::<_, String>(9)?,
-                        is_expense_eligible: item_row.get::<_, i64>(10)? == 1,
+                        remote_id: item_row.get::<_, Option<String>>(7)?,
+                        name: item_row.get::<_, String>(8)?,
+                        display_name: item_row.get::<_, String>(9)?,
+                        color_hex: item_row.get::<_, String>(10)?,
+                        is_expense_eligible: item_row.get::<_, i64>(11)? == 1,
                         created_at: None,
                     })
                 } else {
@@ -2118,7 +2238,8 @@ pub fn list_local_sales(
                     product_name: item_row.get::<_, String>(1)?,
                     quantity: item_row.get::<_, i64>(2)?,
                     unit_price: item_row.get::<_, f64>(3)?,
-                    subtotal: item_row.get::<_, f64>(4)?,
+                    price_tier: item_row.get::<_, String>(4)?,
+                    subtotal: item_row.get::<_, f64>(5)?,
                     owner_id: partner
                         .as_ref()
                         .and_then(|current| current.remote_id.clone())
@@ -2464,6 +2585,9 @@ pub fn list_local_bodega_products(
          p.barcode,
          p.sku,
          p.sale_price,
+         p.sale_price_x3,
+         p.sale_price_x6,
+         p.sale_price_x12,
          p.stock,
          p.bodega_stock,
          p.bodega_at,
@@ -2484,14 +2608,14 @@ pub fn list_local_bodega_products(
 
     let rows = statement
         .query_map([], |row| {
-            let owner_local_id: Option<String> = row.get(10)?;
+            let owner_local_id: Option<String> = row.get(13)?;
             let owner = owner_local_id.map(|local_id| LocalPartner {
                 id: local_id,
-                remote_id: row.get::<_, Option<String>>(11).unwrap_or(None),
-                name: row.get::<_, String>(12).unwrap_or_default(),
-                display_name: row.get::<_, String>(13).unwrap_or_default(),
-                color_hex: row.get::<_, String>(14).unwrap_or_default(),
-                is_expense_eligible: row.get::<_, i64>(15).unwrap_or(1) == 1,
+                remote_id: row.get::<_, Option<String>>(14).unwrap_or(None),
+                name: row.get::<_, String>(15).unwrap_or_default(),
+                display_name: row.get::<_, String>(16).unwrap_or_default(),
+                color_hex: row.get::<_, String>(17).unwrap_or_default(),
+                is_expense_eligible: row.get::<_, i64>(18).unwrap_or(1) == 1,
                 created_at: None,
             });
 
@@ -2502,10 +2626,13 @@ pub fn list_local_bodega_products(
                 barcode: row.get::<_, String>(3)?,
                 sku: row.get::<_, Option<String>>(4)?,
                 sale_price: row.get::<_, f64>(5)?,
-                stock: row.get::<_, i64>(6)?,
-                bodega_stock: row.get::<_, i64>(7)?,
-                bodega_at: row.get::<_, Option<String>>(8)?,
-                is_active: row.get::<_, i64>(9)? == 1,
+                sale_price_x3: row.get::<_, Option<f64>>(6)?,
+                sale_price_x6: row.get::<_, Option<f64>>(7)?,
+                sale_price_x12: row.get::<_, Option<f64>>(8)?,
+                stock: row.get::<_, i64>(9)?,
+                bodega_stock: row.get::<_, i64>(10)?,
+                bodega_at: row.get::<_, Option<String>>(11)?,
+                is_active: row.get::<_, i64>(12)? == 1,
                 owner,
             })
         })
@@ -3338,13 +3465,13 @@ pub fn upsert_remote_products(
                 r#"
         INSERT INTO products (
           local_id, remote_id, barcode, sku, name, description, category,
-          owner_id, owner_remote_id, purchase_price, sale_price, stock, min_stock,
+          owner_id, owner_remote_id, purchase_price, sale_price, sale_price_x3, sale_price_x6, sale_price_x12, stock, min_stock,
           image_url, is_active, is_clearance, clearance_price, bodega_at, disposed_at, bodega_stock,
           sync_status, synced_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-          ?8, ?9, ?10, ?11, ?12, ?13,
-          ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+          ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+          ?17, ?18, ?19, ?20, ?21, ?22, ?23,
           'synced', CURRENT_TIMESTAMP
         )
         ON CONFLICT(local_id) DO UPDATE SET
@@ -3358,6 +3485,9 @@ pub fn upsert_remote_products(
           owner_remote_id = excluded.owner_remote_id,
           purchase_price = excluded.purchase_price,
           sale_price = excluded.sale_price,
+          sale_price_x3 = excluded.sale_price_x3,
+          sale_price_x6 = excluded.sale_price_x6,
+          sale_price_x12 = excluded.sale_price_x12,
           stock = excluded.stock,
           min_stock = excluded.min_stock,
           image_url = excluded.image_url,
@@ -3383,6 +3513,9 @@ pub fn upsert_remote_products(
                     product.owner_id,
                     product.purchase_price,
                     product.sale_price,
+                    product.sale_price_x3,
+                    product.sale_price_x6,
+                    product.sale_price_x12,
                     product.stock,
                     product.min_stock,
                     product.image_url,
@@ -3423,6 +3556,9 @@ pub fn find_local_product_by_barcode(
         p.category,
         p.purchase_price,
         p.sale_price,
+        p.sale_price_x3,
+        p.sale_price_x6,
+        p.sale_price_x12,
         p.stock,
         p.min_stock,
         p.image_url,
@@ -3527,13 +3663,13 @@ pub fn upsert_local_product(
             r#"
       INSERT INTO products (
         local_id, remote_id, barcode, sku, name, description, category,
-        owner_id, owner_remote_id, purchase_price, sale_price, stock, min_stock,
+        owner_id, owner_remote_id, purchase_price, sale_price, sale_price_x3, sale_price_x6, sale_price_x12, stock, min_stock,
         image_url, is_active, is_clearance, clearance_price, bodega_at, disposed_at, bodega_stock,
         sync_status
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-        ?8, ?9, ?10, ?11, ?12, ?13,
-        NULL, ?14, 0, NULL, NULL, NULL, 0,
+        ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+        NULL, ?17, 0, NULL, NULL, NULL, 0,
         'pending'
       )
       ON CONFLICT(local_id) DO UPDATE SET
@@ -3547,6 +3683,9 @@ pub fn upsert_local_product(
         owner_remote_id = excluded.owner_remote_id,
         purchase_price = excluded.purchase_price,
         sale_price = excluded.sale_price,
+        sale_price_x3 = excluded.sale_price_x3,
+        sale_price_x6 = excluded.sale_price_x6,
+        sale_price_x12 = excluded.sale_price_x12,
         stock = excluded.stock,
         min_stock = excluded.min_stock,
         is_active = excluded.is_active,
@@ -3565,6 +3704,9 @@ pub fn upsert_local_product(
                 input.owner_id,
                 input.purchase_price,
                 input.sale_price,
+                input.sale_price_x3,
+                input.sale_price_x6,
+                input.sale_price_x12,
                 input.stock,
                 input.min_stock,
                 if input.is_active { 1 } else { 0 }
