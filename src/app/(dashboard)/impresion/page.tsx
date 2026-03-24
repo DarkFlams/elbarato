@@ -40,6 +40,25 @@ import { isTauriRuntime } from "@/lib/tauri-runtime";
 import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 const WINDOWS_DEFAULT_VALUE = "__WINDOWS_DEFAULT__";
+const PRINTER_LOAD_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
 
 function buildPrinterTestTicket(printerName: string | null) {
   const now = new Date();
@@ -93,7 +112,11 @@ export default function ImpresionPage() {
 
     try {
       const [availablePrinters, savedPrinter, savedLabelPrinter, autoPrintEnabled] = await Promise.all([
-        listLocalPrinters(),
+        withTimeout(
+          listLocalPrinters(),
+          PRINTER_LOAD_TIMEOUT_MS,
+          "Windows esta tardando demasiado en responder la lista de impresoras."
+        ),
         getSavedTicketPrinterName(),
         getSavedLabelPrinterName(),
         getTicketAutoPrintEnabled(),

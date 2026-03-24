@@ -9,6 +9,8 @@ import {
   RefreshCcw,
   ShieldCheck,
 } from "lucide-react";
+import { relaunch } from "@tauri-apps/plugin-process";
+import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { APP_VERSION } from "@/lib/constants";
@@ -69,23 +71,22 @@ export default function ActualizacionesPage() {
       }
 
       let downloaded = 0;
-      await update.downloadAndInstall((event: any) => {
+      let contentLength = 0;
+      await update.downloadAndInstall((event: DownloadEvent) => {
         switch (event.event) {
           case "Started":
+            contentLength = Number(event.data.contentLength ?? 0);
             setState((current) => ({
               ...current,
               progress: 0,
             }));
             break;
           case "Progress":
-            downloaded += Number(event.data?.chunkLength ?? 0);
+            downloaded += Number(event.data.chunkLength ?? 0);
             setState((current) => ({
               ...current,
-              progress: Number(event.data?.contentLength ?? 0)
-                ? Math.min(
-                    100,
-                    Math.round((downloaded / Number(event.data.contentLength)) * 100)
-                  )
+              progress: contentLength
+                ? Math.min(100, Math.round((downloaded / contentLength) * 100))
                 : current.progress,
             }));
             break;
@@ -103,6 +104,12 @@ export default function ActualizacionesPage() {
         installing: false,
         available: false,
       }));
+
+      try {
+        await relaunch();
+      } catch (error) {
+        console.warn("[ActualizacionesPage] no se pudo relanzar la app tras actualizar:", error);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo instalar la actualizacion";
       setState((current) => ({
@@ -114,7 +121,13 @@ export default function ActualizacionesPage() {
   };
 
   useEffect(() => {
-    void runCheck();
+    const timer = window.setTimeout(() => {
+      void runCheck();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, []);
 
   return (

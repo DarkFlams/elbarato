@@ -4549,7 +4549,7 @@ pub fn list_local_printers() -> Result<Vec<LocalPrinterInfo>, String> {
     #[cfg(target_os = "windows")]
     {
         let script = r#"$ErrorActionPreference='Stop';
-$printers = @(Get-CimInstance Win32_Printer | Select-Object Name, Default, WorkOffline, PrinterStatus | Sort-Object Name);
+$printers = @(Get-CimInstance Win32_Printer -OperationTimeoutSec 4 -ErrorAction Stop | Select-Object Name, Default, WorkOffline, PrinterStatus | Sort-Object Name);
 if ($printers.Count -eq 0) {
   '[]'
 } else {

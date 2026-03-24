@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "El Barato",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "identifier": "com.elbarato.pos",
   "build": {
     "frontendDist": "../out",
@@ -30,6 +30,12 @@
     "active": true,
     "createUpdaterArtifacts": false,
     "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
