@@ -63,11 +63,6 @@ interface ProductCounts {
   availableCount: number;
 }
 
-interface ProductCountRow {
-  stock: number;
-  min_stock: number;
-}
-
 interface UpsertLocalProductInput {
   productId?: string | null;
   remoteId?: string | null;
@@ -624,36 +619,80 @@ export async function getCatalogProducts(filters: ProductQuery = {}) {
   }
 }
 
-export async function getCatalogProductCounts(filters: Pick<ProductQuery, "search" | "ownerId"> = {}) {
+export async function getCatalogProductsByIds(ids: string[]) {
+  const uniqueIds = Array.from(
+    new Set(ids.map((value) => value.trim()).filter(Boolean))
+  );
+
+  if (uniqueIds.length === 0) {
+    return [] as ProductWithOwner[];
+  }
+
   if (!isTauriRuntime()) {
     const supabase = createClient();
-    let query = supabase
+    const { data, error } = await supabase
       .from("products")
-      .select("stock, min_stock")
-      .eq("is_active", true);
+      .select(
+        `
+        *,
+        owner:partners!products_owner_id_fkey (
+          id, name, display_name, color_hex, is_expense_eligible, created_at
+        )
+      `
+      )
+      .in("id", uniqueIds);
 
-    if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
-    if (filters.search?.trim()) {
-      const term = buildSearchPattern(filters.search);
-      if (term) {
-        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+    if (error) throw error;
+    return ((data as ProductWithOwner[]) || []).sort((left, right) =>
+      left.name.localeCompare(right.name)
+    );
+  }
+
+  try {
+    const products = await invoke<LocalProductWithOwnerRecord[]>(
+      "list_local_products_by_ids",
+      {
+        ids: uniqueIds,
       }
+    );
+
+    return products
+      .map((record) => normalizeLocalProductWithOwner(record))
+      .filter(
+        (
+          entry
+        ): entry is { product: LocalProductRecord; owner: LocalPartnerRecord } =>
+          Boolean(entry)
+      )
+      .map(({ product, owner }) => mapLocalProduct(product, owner));
+  } catch (error) {
+    if (!isMissingTauriCommandError(error)) {
+      throw error;
     }
 
-    const { data, error } = await query.limit(5000);
-    if (error) throw error;
-    const products = (data || []) as ProductCountRow[];
+    const supabase = createClient();
+    const { data, error: remoteError } = await supabase
+      .from("products")
+      .select(
+        `
+        *,
+        owner:partners!products_owner_id_fkey (
+          id, name, display_name, color_hex, is_expense_eligible, created_at
+        )
+      `
+      )
+      .in("id", uniqueIds);
 
-    const totalCount = products.length;
-    const outCount = products.filter((product) => Number(product.stock) <= 0).length;
-    const lowCount = products.filter((product) => Number(product.stock) > 0 && Number(product.stock) <= Number(product.min_stock)).length;
-    const availableCount = products.filter((product) => Number(product.stock) > Number(product.min_stock)).length;
-    return {
-      totalCount,
-      outCount,
-      lowCount,
-      availableCount,
-    };
+    if (remoteError) throw remoteError;
+    return ((data as ProductWithOwner[]) || []).sort((left, right) =>
+      left.name.localeCompare(right.name)
+    );
+  }
+}
+
+export async function getCatalogProductCounts(filters: Pick<ProductQuery, "search" | "ownerId"> = {}) {
+  if (!isTauriRuntime()) {
+    return supabaseCountProducts(filters);
   }
 
   try {
@@ -667,35 +706,41 @@ export async function getCatalogProductCounts(filters: Pick<ProductQuery, "searc
     }
 
     console.warn("[catalog] count_local_products unavailable, using Supabase fallback");
-    const supabase = createClient();
-    let query = supabase
+    return supabaseCountProducts(filters);
+  }
+}
+
+async function supabaseCountProducts(filters: Pick<ProductQuery, "search" | "ownerId"> = {}): Promise<ProductCounts> {
+  const supabase = createClient();
+
+  function buildBaseQuery() {
+    let q = supabase
       .from("products")
-      .select("stock, min_stock")
+      .select("id", { count: "exact", head: true })
       .eq("is_active", true);
 
-    if (filters.ownerId) query = query.eq("owner_id", filters.ownerId);
+    if (filters.ownerId) q = q.eq("owner_id", filters.ownerId);
     if (filters.search?.trim()) {
       const term = buildSearchPattern(filters.search);
       if (term) {
-        query = query.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
+        q = q.or(`name.ilike.${term},barcode.ilike.${term},sku.ilike.${term}`);
       }
     }
-
-    const { data, error: remoteError } = await query.limit(5000);
-    if (remoteError) throw remoteError;
-    const products = (data || []) as ProductCountRow[];
-
-    const totalCount = products.length;
-    const outCount = products.filter((product) => Number(product.stock) <= 0).length;
-    const lowCount = products.filter((product) => Number(product.stock) > 0 && Number(product.stock) <= Number(product.min_stock)).length;
-    const availableCount = products.filter((product) => Number(product.stock) > Number(product.min_stock)).length;
-    return {
-      totalCount,
-      outCount,
-      lowCount,
-      availableCount,
-    };
+    return q;
   }
+
+  const [totalRes, outRes, lowRes] = await Promise.all([
+    buildBaseQuery(),
+    buildBaseQuery().lte("stock", 0),
+    buildBaseQuery().gt("stock", 0).filter("stock", "lte", "min_stock"),
+  ]);
+
+  const totalCount = totalRes.count ?? 0;
+  const outCount = outRes.count ?? 0;
+  const lowCount = lowRes.count ?? 0;
+  const availableCount = Math.max(0, totalCount - outCount - lowCount);
+
+  return { totalCount, outCount, lowCount, availableCount };
 }
 
 export async function findCatalogProductByBarcode(barcode: string) {

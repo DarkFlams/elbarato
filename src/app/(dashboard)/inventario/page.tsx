@@ -20,6 +20,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Package } from "lucide-react";
 import { ProductTable } from "@/components/inventory/product-table";
 import { ProductForm } from "@/components/inventory/product-form";
+import { BulkProductForm } from "@/components/inventory/bulk-product-form";
 import { BarcodeLabel } from "@/components/inventory/barcode-label";
 import { getCatalogPartners } from "@/lib/local/catalog";
 import type { Partner, ProductWithOwner } from "@/types/database";
@@ -80,7 +81,10 @@ export default function InventarioPage() {
           </p>
         </div>
 
-        <ProductForm partners={partners} onSaved={handleProductSaved} />
+        <div className="flex items-center gap-2">
+          <BulkProductForm partners={partners} onSaved={handleProductSaved} />
+          <ProductForm partners={partners} onSaved={handleProductSaved} />
+        </div>
       </div>
 
       {/* Productos */}

@@ -19,8 +19,10 @@ export type ExpenseScope = "individual" | "shared";
 export type CashSessionStatus = "open" | "closed";
 export type PaymentMethod = "cash" | "transfer";
 export type PriceTier = "normal" | "x3" | "x6" | "x12" | "manual";
+export type SaleStatus = "completed" | "voided";
 export type InventoryMovementReason =
   | "sale"
+  | "sale_void"
   | "manual_adjustment"
   | "initial_stock"
   | "restock"
@@ -93,10 +95,14 @@ export interface Sale {
   sold_by: string | null;
   total: number;
   payment_method: PaymentMethod;
+  status: SaleStatus;
   notes: string | null;
   amount_received: number | null;
   change_given: number | null;
   idempotency_key: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   created_at: string;
   synced: boolean;
 }

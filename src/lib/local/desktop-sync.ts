@@ -28,6 +28,11 @@ interface LocalProductKey {
   barcode: string;
 }
 
+interface LocalSaleKey {
+  id: string;
+  remote_id?: string | null;
+}
+
 interface RegisterLocalSalePayload {
   cashSessionId: string;
   paymentMethod: "cash" | "transfer";
@@ -41,6 +46,11 @@ interface RegisterLocalSalePayload {
   amountReceived?: number | null;
   changeGiven?: number | null;
   idempotencyKey?: string | null;
+}
+
+interface VoidLocalSalePayload {
+  saleId: string;
+  reason?: string | null;
 }
 
 interface UpsertLocalExpensePayload {
@@ -112,6 +122,7 @@ interface SyncReferenceState {
   partnerRemoteIds: RemoteIdMap;
   productRemoteIds: RemoteIdMap;
   cashSessionRemoteIds: RemoteIdMap;
+  saleRemoteIds: RemoteIdMap;
   expenseRemoteIds: RemoteIdMap;
 }
 
@@ -201,7 +212,7 @@ function isItemDue(item: LocalSyncQueueItem) {
 }
 
 async function loadReferenceState(): Promise<SyncReferenceState> {
-  const [partners, productKeys, cashSessions] = await Promise.all([
+  const [partners, productKeys, cashSessions, saleKeys] = await Promise.all([
     invoke<LocalPartnerKey[]>("list_local_partners"),
     invoke<LocalProductKey[]>("list_local_product_keys"),
     invoke<LocalCashSessionKey[]>("list_local_cash_sessions", {
@@ -209,12 +220,14 @@ async function loadReferenceState(): Promise<SyncReferenceState> {
       toDate: null,
       limit: 5000,
     }),
+    invoke<LocalSaleKey[]>("list_local_sale_keys"),
   ]);
 
   return {
     partnerRemoteIds: buildRemoteIdMap(partners),
     productRemoteIds: buildRemoteIdMap(productKeys),
     cashSessionRemoteIds: buildRemoteIdMap(cashSessions),
+    saleRemoteIds: buildRemoteIdMap(saleKeys),
     expenseRemoteIds: new Map<string, string | null>(),
   };
 }
@@ -316,6 +329,33 @@ async function syncSaleItem(item: LocalSyncQueueItem, state: SyncReferenceState)
   }
 
   await markSyncQueueItemSyncedLocalFirst(item.id, remoteSaleId);
+  rememberRemoteId(state.saleRemoteIds, item.entityLocalId, remoteSaleId);
+}
+
+async function syncVoidSaleItem(item: LocalSyncQueueItem, state: SyncReferenceState) {
+  const supabase = createClient();
+  const payload = parsePayload<VoidLocalSalePayload>(item);
+  const remoteSaleId = resolveRequiredRemoteId(
+    state.saleRemoteIds,
+    item.entityRemoteId ?? payload.saleId ?? item.entityLocalId,
+    "El ticket"
+  );
+
+  const { data, error } = await supabase.rpc("void_sale", {
+    p_sale_id: remoteSaleId,
+    p_reason: payload.reason?.trim() || null,
+  });
+
+  if (error) throw error;
+
+  const row = getRpcRow<{ sale_id?: string }>(data);
+  const syncedSaleId = String(row?.sale_id ?? remoteSaleId);
+  if (!syncedSaleId) {
+    throw new Error("No se recibio sale_id remoto para la anulacion");
+  }
+
+  await markSyncQueueItemSyncedLocalFirst(item.id, syncedSaleId);
+  rememberRemoteId(state.saleRemoteIds, item.entityLocalId, syncedSaleId);
 }
 
 async function syncExpenseItem(item: LocalSyncQueueItem, state: SyncReferenceState) {
@@ -502,6 +542,11 @@ async function runDesktopOperation(item: LocalSyncQueueItem, state: SyncReferenc
   }
 
   if (item.entityName === "sales") {
+    if (item.operationType === "void") {
+      await syncVoidSaleItem(item, state);
+      return;
+    }
+
     await syncSaleItem(item, state);
     return;
   }

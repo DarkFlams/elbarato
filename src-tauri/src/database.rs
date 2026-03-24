@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use std::{
     ffi::c_void,
     fs,
@@ -23,7 +24,7 @@ use windows_sys::Win32::{
 };
 
 const DB_FILE_NAME: &str = "pos_tienda_local.db3";
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATIONS_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -110,6 +111,11 @@ CREATE TABLE IF NOT EXISTS sales (
   amount_received REAL,
   change_given REAL,
   idempotency_key TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status TEXT NOT NULL DEFAULT 'completed',
+  voided_at TEXT,
+  voided_by_remote_id TEXT,
+  void_reason TEXT,
   sync_status TEXT NOT NULL DEFAULT 'pending',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   synced_at TEXT,
@@ -437,6 +443,21 @@ pub struct RegisterLocalSaleResult {
     pub item_count: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidLocalSaleInput {
+    pub sale_id: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidLocalSaleResult {
+    pub sale_id: String,
+    pub restored_item_count: i64,
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSessionSalesStats {
@@ -450,6 +471,8 @@ pub struct LocalSessionSalesStats {
 #[serde(rename_all = "snake_case")]
 pub struct LocalSaleHistoryItem {
     pub id: String,
+    pub product_id: String,
+    pub product_barcode: String,
     pub product_name: String,
     pub quantity: i64,
     pub unit_price: f64,
@@ -467,8 +490,18 @@ pub struct LocalSaleHistory {
     pub created_at: String,
     pub total: f64,
     pub payment_method: String,
+    pub status: String,
+    pub voided_at: Option<String>,
+    pub void_reason: Option<String>,
     pub sold_by_partner: Option<LocalPartner>,
     pub sale_items: Vec<LocalSaleHistoryItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct LocalSaleKey {
+    pub id: String,
+    pub remote_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -704,6 +737,36 @@ fn apply_incremental_sqlite_migrations(connection: &Connection) -> Result<(), St
         "price_tier",
         "ALTER TABLE sale_items ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'normal'",
     )?;
+    ensure_sqlite_column(
+        connection,
+        "sales",
+        "created_at",
+        "ALTER TABLE sales ADD COLUMN created_at TEXT",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "sales",
+        "status",
+        "ALTER TABLE sales ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "sales",
+        "voided_at",
+        "ALTER TABLE sales ADD COLUMN voided_at TEXT",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "sales",
+        "voided_by_remote_id",
+        "ALTER TABLE sales ADD COLUMN voided_by_remote_id TEXT",
+    )?;
+    ensure_sqlite_column(
+        connection,
+        "sales",
+        "void_reason",
+        "ALTER TABLE sales ADD COLUMN void_reason TEXT",
+    )?;
 
     connection
         .execute(
@@ -714,6 +777,26 @@ fn apply_incremental_sqlite_migrations(connection: &Connection) -> Result<(), St
             [],
         )
         .map_err(|error| format!("No se pudo normalizar price_tier local: {error}"))?;
+
+    connection
+        .execute(
+            "UPDATE sales
+       SET created_at = updated_at
+       WHERE created_at IS NULL
+          OR TRIM(created_at) = ''",
+            [],
+        )
+        .map_err(|error| format!("No se pudo normalizar created_at local de ventas: {error}"))?;
+
+    connection
+        .execute(
+            "UPDATE sales
+       SET status = 'completed'
+       WHERE status IS NULL
+          OR TRIM(status) = ''",
+            [],
+        )
+        .map_err(|error| format!("No se pudo normalizar estado local de ventas: {error}"))?;
 
     Ok(())
 }
@@ -1023,6 +1106,29 @@ fn resolve_cash_session_local_id(
     )
     .optional()
     .map_err(|error| format!("No se pudo resolver sesion local: {error}"))
+}
+
+fn resolve_sale_local_row(
+    connection: &Connection,
+    sale_id: &str,
+) -> Result<Option<(String, Option<String>, String)>, String> {
+    connection
+        .query_row(
+            "SELECT local_id, remote_id, status
+       FROM sales
+       WHERE local_id = ?1 OR remote_id = ?1
+       LIMIT 1",
+            params![sale_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("No se pudo resolver venta local: {error}"))
 }
 
 fn resolve_expense_local_id(
@@ -2001,8 +2107,8 @@ pub fn register_local_sale(
     .execute(
       "INSERT INTO sales (
          local_id, remote_id, cash_session_local_id, cash_session_remote_id, sold_by_remote_id, total,
-         payment_method, notes, amount_received, change_given, idempotency_key, sync_status
-       ) VALUES (?1, NULL, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, 'pending')",
+         payment_method, notes, amount_received, change_given, idempotency_key, created_at, status, sync_status
+       ) VALUES (?1, NULL, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, 'completed', 'pending')",
       params![
         sale_local_id,
         cash_session_local_id,
@@ -2119,6 +2225,154 @@ pub fn register_local_sale(
 }
 
 #[tauri::command]
+pub fn void_local_sale(
+    state: State<'_, DatabaseState>,
+    input: VoidLocalSaleInput,
+) -> Result<VoidLocalSaleResult, String> {
+    let mut connection = connection_from_state(&state)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("No se pudo abrir transaccion local para anular venta: {error}"))?;
+
+    let Some((sale_local_id, sale_remote_id, current_status)) =
+        resolve_sale_local_row(&transaction, &input.sale_id)?
+    else {
+        return Err("Ticket no encontrado".to_string());
+    };
+
+    let restored_item_count = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(quantity), 0) FROM sale_items WHERE sale_local_id = ?1",
+            params![sale_local_id.clone()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("No se pudo leer detalle local del ticket: {error}"))?;
+
+    if current_status == "voided" {
+        return Ok(VoidLocalSaleResult {
+            sale_id: sale_remote_id.unwrap_or(sale_local_id),
+            restored_item_count,
+            status: "voided".to_string(),
+        });
+    }
+
+    let void_reason = input
+        .reason
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Anulacion manual")
+        .to_string();
+
+    let item_rows = {
+        let mut item_statement = transaction
+            .prepare(
+                "SELECT product_local_id, product_remote_id, quantity
+           FROM sale_items
+           WHERE sale_local_id = ?1",
+            )
+            .map_err(|error| format!("No se pudo preparar detalle local del ticket a anular: {error}"))?;
+
+        let rows = item_statement
+            .query_map(params![sale_local_id.clone()], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|error| format!("No se pudo leer items locales para anular ticket: {error}"))?;
+            
+        let mut collected = Vec::new();
+        for item in rows {
+            collected.push(item.map_err(|error| format!("Error iterando item para anular: {error}"))?);
+        }
+        collected
+    };
+
+    for (product_local_id, product_remote_id, quantity) in item_rows {
+
+        let Some(product_id) = product_local_id else {
+            return Err("Uno de los items del ticket no tiene referencia local de producto".to_string());
+        };
+
+        transaction
+            .execute(
+                "UPDATE products
+         SET stock = stock + ?2,
+             sync_status = 'pending',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE local_id = ?1",
+                params![product_id.clone(), quantity],
+            )
+            .map_err(|error| format!("No se pudo restaurar stock local del producto: {error}"))?;
+
+        transaction
+            .execute(
+                "INSERT INTO inventory_movements (
+           local_id, remote_id, product_id, product_remote_id, quantity_change, reason,
+           reference_local_id, reference_remote_id, performed_by_remote_id, sync_status
+         ) VALUES (?1, NULL, ?2, ?3, ?4, 'sale_void', ?5, ?6, NULL, 'pending')",
+                params![
+                    Uuid::new_v4().to_string(),
+                    product_id,
+                    product_remote_id,
+                    quantity,
+                    sale_local_id.clone(),
+                    sale_remote_id.clone()
+                ],
+            )
+            .map_err(|error| {
+                format!("No se pudo guardar movimiento local de anulacion de ticket: {error}")
+            })?;
+    }
+
+    transaction
+        .execute(
+            "UPDATE sales
+       SET status = 'voided',
+           voided_at = CURRENT_TIMESTAMP,
+           void_reason = ?2,
+           sync_status = 'pending',
+           synced_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE local_id = ?1",
+            params![sale_local_id.clone(), void_reason.clone()],
+        )
+        .map_err(|error| format!("No se pudo marcar ticket local como anulado: {error}"))?;
+
+    let payload = serde_json::json!({
+        "saleId": sale_remote_id.clone().unwrap_or_else(|| sale_local_id.clone()),
+        "reason": void_reason,
+    })
+    .to_string();
+
+    transaction
+        .execute(
+            "INSERT INTO sync_queue (
+         local_id, entity_name, entity_local_id, entity_remote_id, operation_type, payload_json, idempotency_key, status
+       ) VALUES (?1, 'sales', ?2, ?3, 'void', ?4, NULL, 'pending')",
+            params![
+                Uuid::new_v4().to_string(),
+                sale_local_id.clone(),
+                sale_remote_id.clone(),
+                payload
+            ],
+        )
+        .map_err(|error| format!("No se pudo encolar sync local de anulacion de ticket: {error}"))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("No se pudo confirmar anulacion local del ticket: {error}"))?;
+
+    Ok(VoidLocalSaleResult {
+        sale_id: sale_remote_id.unwrap_or(sale_local_id),
+        restored_item_count,
+        status: "voided".to_string(),
+    })
+}
+
+#[tauri::command]
 pub fn get_local_session_sales_stats(
     state: State<'_, DatabaseState>,
     cash_session_id: String,
@@ -2137,28 +2391,28 @@ pub fn get_local_session_sales_stats(
 
     let total_sales = connection
         .query_row(
-            "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1",
+            "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1 AND status <> 'voided'",
             params![cash_session_local_id.clone()],
             |row| row.get::<_, f64>(0),
         )
         .map_err(|error| format!("No se pudo sumar ventas locales: {error}"))?;
     let total_cash = connection
     .query_row(
-      "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1 AND payment_method = 'cash'",
+      "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1 AND payment_method = 'cash' AND status <> 'voided'",
       params![cash_session_local_id.clone()],
       |row| row.get::<_, f64>(0),
     )
     .map_err(|error| format!("No se pudo sumar ventas locales en efectivo: {error}"))?;
     let total_transfer = connection
     .query_row(
-      "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1 AND payment_method = 'transfer'",
+      "SELECT COALESCE(SUM(total), 0) FROM sales WHERE cash_session_local_id = ?1 AND payment_method = 'transfer' AND status <> 'voided'",
       params![cash_session_local_id.clone()],
       |row| row.get::<_, f64>(0),
     )
     .map_err(|error| format!("No se pudo sumar ventas locales por transferencia: {error}"))?;
     let sale_count = connection
         .query_row(
-            "SELECT COUNT(*) FROM sales WHERE cash_session_local_id = ?1",
+            "SELECT COUNT(*) FROM sales WHERE cash_session_local_id = ?1 AND status <> 'voided'",
             params![cash_session_local_id],
             |row| row.get::<_, i64>(0),
         )
@@ -2179,16 +2433,16 @@ pub fn list_local_sales(
     to_date: Option<String>,
 ) -> Result<Vec<LocalSaleHistory>, String> {
     let connection = connection_from_state(&state)?;
-    let (date_clause, params) = build_datetime_range_clause("s.updated_at", from_date, to_date);
+    let (date_clause, params) = build_datetime_range_clause("s.created_at", from_date, to_date);
     let params_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
     let mut sales_sql = String::from(
-        "SELECT s.local_id, s.remote_id, s.updated_at, s.total, s.payment_method
+        "SELECT s.local_id, s.remote_id, s.created_at, s.total, s.payment_method, s.status, s.voided_at, s.void_reason
      FROM sales s
      WHERE 1 = 1",
     );
     sales_sql.push_str(&date_clause);
-    sales_sql.push_str(" ORDER BY s.updated_at DESC");
+    sales_sql.push_str(" ORDER BY s.created_at DESC");
 
     let mut statement = connection
         .prepare(&sales_sql)
@@ -2202,19 +2456,24 @@ pub fn list_local_sales(
                 row.get::<_, String>(2)?,
                 row.get::<_, f64>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })
         .map_err(|error| format!("No se pudieron leer ventas locales: {error}"))?;
 
     let mut sales = Vec::new();
     for row in rows {
-        let (sale_local_id, remote_id, created_at, total, payment_method) =
+        let (sale_local_id, remote_id, created_at, total, payment_method, status, voided_at, void_reason) =
             row.map_err(|error| format!("No se pudo mapear venta local: {error}"))?;
 
         let mut item_statement = connection
             .prepare(
                 "SELECT
            si.local_id,
+           COALESCE(si.product_remote_id, si.product_local_id, ''),
+           si.product_barcode,
            si.product_name,
            si.quantity,
            si.unit_price,
@@ -2235,15 +2494,15 @@ pub fn list_local_sales(
 
         let item_rows = item_statement
             .query_map(params![sale_local_id.clone()], |item_row| {
-                let partner_local_id: Option<String> = item_row.get(6)?;
+                let partner_local_id: Option<String> = item_row.get(8)?;
                 let partner = if let Some(local_id) = partner_local_id {
                     Some(LocalPartner {
                         id: local_id,
-                        remote_id: item_row.get::<_, Option<String>>(7)?,
-                        name: item_row.get::<_, String>(8)?,
-                        display_name: item_row.get::<_, String>(9)?,
-                        color_hex: item_row.get::<_, String>(10)?,
-                        is_expense_eligible: item_row.get::<_, i64>(11)? == 1,
+                        remote_id: item_row.get::<_, Option<String>>(9)?,
+                        name: item_row.get::<_, String>(10)?,
+                        display_name: item_row.get::<_, String>(11)?,
+                        color_hex: item_row.get::<_, String>(12)?,
+                        is_expense_eligible: item_row.get::<_, i64>(13)? == 1,
                         created_at: None,
                     })
                 } else {
@@ -2252,11 +2511,13 @@ pub fn list_local_sales(
 
                 Ok(LocalSaleHistoryItem {
                     id: item_row.get::<_, String>(0)?,
-                    product_name: item_row.get::<_, String>(1)?,
-                    quantity: item_row.get::<_, i64>(2)?,
-                    unit_price: item_row.get::<_, f64>(3)?,
-                    price_tier: item_row.get::<_, String>(4)?,
-                    subtotal: item_row.get::<_, f64>(5)?,
+                    product_id: item_row.get::<_, String>(1)?,
+                    product_barcode: item_row.get::<_, String>(2)?,
+                    product_name: item_row.get::<_, String>(3)?,
+                    quantity: item_row.get::<_, i64>(4)?,
+                    unit_price: item_row.get::<_, f64>(5)?,
+                    price_tier: item_row.get::<_, String>(6)?,
+                    subtotal: item_row.get::<_, f64>(7)?,
                     owner_id: partner
                         .as_ref()
                         .and_then(|current| current.remote_id.clone())
@@ -2284,9 +2545,40 @@ pub fn list_local_sales(
             created_at,
             total,
             payment_method,
+            status,
+            voided_at,
+            void_reason,
             sold_by_partner: None,
             sale_items,
         });
+    }
+
+    Ok(sales)
+}
+
+#[tauri::command]
+pub fn list_local_sale_keys(state: State<'_, DatabaseState>) -> Result<Vec<LocalSaleKey>, String> {
+    let connection = connection_from_state(&state)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT local_id, remote_id
+       FROM sales
+       ORDER BY updated_at DESC",
+        )
+        .map_err(|error| format!("No se pudo preparar lectura local de claves de ventas: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(LocalSaleKey {
+                id: row.get::<_, String>(0)?,
+                remote_id: row.get::<_, Option<String>>(1)?,
+            })
+        })
+        .map_err(|error| format!("No se pudieron leer claves locales de ventas: {error}"))?;
+
+    let mut sales = Vec::new();
+    for row in rows {
+        sales.push(row.map_err(|error| format!("No se pudo mapear clave local de venta: {error}"))?);
     }
 
     Ok(sales)
@@ -2359,6 +2651,7 @@ pub fn get_local_cash_session_report(
            FROM sales s
            JOIN sale_items si ON si.sale_local_id = s.local_id
            WHERE s.cash_session_local_id = cs.local_id
+             AND s.status <> 'voided'
              AND si.owner_id = p.local_id
          ), 0) AS total_sales,
          COALESCE((
@@ -3233,45 +3526,84 @@ pub fn mark_local_sync_queue_item_synced(
                 return Err("No se recibio remote_id para sincronizar la venta local".to_string());
             }
 
-            transaction
-                .execute(
-                    "UPDATE sales
+            if operation_type == "void" {
+                transaction
+                    .execute(
+                        "UPDATE sales
            SET remote_id = COALESCE(remote_id, ?2),
-               sync_status = 'synced',
+               sync_status = ?3,
                synced_at = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE local_id = ?1",
-                    params![entity_local_id.clone(), effective_remote_id.clone()],
-                )
-                .map_err(|error| {
-                    format!("No se pudo marcar venta local como sincronizada: {error}")
-                })?;
+                        params![
+                            entity_local_id.clone(),
+                            effective_remote_id.clone(),
+                            entity_sync_status
+                        ],
+                    )
+                    .map_err(|error| {
+                        format!("No se pudo marcar anulacion local del ticket como sincronizada: {error}")
+                    })?;
 
-            transaction
-                .execute(
-                    "UPDATE sale_items
+                transaction
+                    .execute(
+                        "UPDATE inventory_movements
+           SET reference_remote_id = COALESCE(reference_remote_id, ?2),
+               sync_status = 'synced',
+               synced_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE reference_local_id = ?1
+             AND reason = 'sale_void'",
+                        params![entity_local_id.clone(), effective_remote_id.clone()],
+                    )
+                    .map_err(|error| {
+                        format!("No se pudo marcar movimientos locales de anulacion como sincronizados: {error}")
+                    })?;
+            } else {
+                transaction
+                    .execute(
+                        "UPDATE sales
+           SET remote_id = COALESCE(remote_id, ?2),
+               sync_status = ?3,
+               synced_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE local_id = ?1",
+                        params![
+                            entity_local_id.clone(),
+                            effective_remote_id.clone(),
+                            entity_sync_status
+                        ],
+                    )
+                    .map_err(|error| {
+                        format!("No se pudo marcar venta local como sincronizada: {error}")
+                    })?;
+
+                transaction
+                    .execute(
+                        "UPDATE sale_items
            SET sale_remote_id = COALESCE(sale_remote_id, ?2),
                synced_at = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE sale_local_id = ?1",
-                    params![entity_local_id.clone(), effective_remote_id.clone()],
-                )
-                .map_err(|error| {
-                    format!("No se pudo marcar detalle local de venta como sincronizado: {error}")
-                })?;
+                        params![entity_local_id.clone(), effective_remote_id.clone()],
+                    )
+                    .map_err(|error| {
+                        format!("No se pudo marcar detalle local de venta como sincronizado: {error}")
+                    })?;
 
-            transaction
-        .execute(
-          "UPDATE inventory_movements
+                transaction
+                    .execute(
+                        "UPDATE inventory_movements
            SET reference_remote_id = COALESCE(reference_remote_id, ?2),
                sync_status = 'synced',
                synced_at = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            WHERE reference_local_id = ?1
              AND reason = 'sale'",
-          params![entity_local_id.clone(), effective_remote_id.clone()],
-        )
-        .map_err(|error| format!("No se pudo marcar movimientos locales de venta como sincronizados: {error}"))?;
+                        params![entity_local_id.clone(), effective_remote_id.clone()],
+                    )
+                    .map_err(|error| format!("No se pudo marcar movimientos locales de venta como sincronizados: {error}"))?;
+            }
         }
         "expenses" => {
             if effective_remote_id.is_none() {
@@ -3489,6 +3821,92 @@ pub fn list_local_products(
     let mut products = Vec::new();
     for row in rows {
         products.push(row.map_err(|error| format!("No se pudo mapear producto local: {error}"))?);
+    }
+
+    Ok(products)
+}
+
+#[tauri::command]
+pub fn list_local_products_by_ids(
+    state: State<'_, DatabaseState>,
+    ids: Vec<String>,
+) -> Result<Vec<LocalProductWithOwner>, String> {
+    let connection = connection_from_state(&state)?;
+    let mut unique_ids = Vec::new();
+
+    for raw_id in ids {
+        let trimmed = raw_id.trim();
+        if trimmed.is_empty() || unique_ids.iter().any(|current: &String| current == trimmed) {
+            continue;
+        }
+        unique_ids.push(trimmed.to_string());
+    }
+
+    if unique_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let local_placeholders = (1..=unique_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remote_placeholders = ((unique_ids.len() + 1)..=(unique_ids.len() * 2))
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!(
+        r#"
+SELECT
+  p.local_id AS product_local_id,
+  p.remote_id AS product_remote_id,
+  p.barcode,
+  p.sku,
+  p.name,
+  p.description,
+  p.category,
+  p.purchase_price,
+  p.sale_price,
+  p.sale_price_x3,
+  p.sale_price_x6,
+  p.sale_price_x12,
+  p.stock,
+  p.min_stock,
+  p.image_url,
+  p.is_active,
+  p.is_clearance,
+  p.clearance_price,
+  p.bodega_at,
+  p.disposed_at,
+  p.bodega_stock,
+  p.updated_at,
+  o.local_id AS owner_local_id,
+  o.remote_id AS owner_remote_id,
+  o.name AS owner_name,
+  o.display_name AS owner_display_name,
+  o.color_hex AS owner_color_hex,
+  o.is_expense_eligible AS owner_is_expense_eligible
+FROM products p
+JOIN partners o ON o.local_id = p.owner_id
+WHERE p.local_id IN ({local_placeholders})
+   OR p.remote_id IN ({remote_placeholders})
+ORDER BY p.name ASC
+"#
+    );
+
+    let mut params = unique_ids.clone();
+    params.extend(unique_ids);
+
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| format!("No se pudo preparar lectura local de productos por ids: {error}"))?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(params.iter()), map_product_with_owner)
+        .map_err(|error| format!("No se pudieron leer productos locales por ids: {error}"))?;
+
+    let mut products = Vec::new();
+    for row in rows {
+        products.push(row.map_err(|error| format!("No se pudo mapear producto local por ids: {error}"))?);
     }
 
     Ok(products)
@@ -4237,5 +4655,159 @@ pub fn print_text_ticket_silent(
 
         let raw_bytes = build_tm_u220_raw_bytes(&ticket_text);
         print_raw_bytes_to_windows_printer(&target_printer, &raw_bytes)
+    }
+}
+
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let trimmed = data_url.trim();
+    let encoded = trimmed
+        .strip_prefix("data:image/png;base64,")
+        .ok_or_else(|| "La etiqueta no viene en formato PNG valido".to_string())?;
+
+    BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("No se pudo decodificar la imagen de etiqueta: {error}"))
+}
+
+#[tauri::command]
+pub fn print_label_image_silent(
+    image_data_url: String,
+    printer_name: Option<String>,
+    copies: Option<u16>,
+    width_mm: Option<u16>,
+    height_mm: Option<u16>,
+) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = image_data_url;
+        let _ = printer_name;
+        let _ = copies;
+        let _ = width_mm;
+        let _ = height_mm;
+        return Err("La impresion de etiquetas solo esta soportada en Windows por ahora".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if image_data_url.trim().is_empty() {
+            return Err("La etiqueta esta vacia".to_string());
+        }
+
+        let requested_printer = printer_name.unwrap_or_default().trim().to_string();
+
+        let target_printer = if requested_printer.is_empty() {
+            get_default_windows_printer_name()?
+        } else {
+            requested_printer
+        };
+
+        if is_virtual_printer_name(&target_printer) {
+            return Err(format!(
+                "La impresora seleccionada no es valida para etiquetas: {}.",
+                target_printer
+            ));
+        }
+
+        let png_bytes = decode_png_data_url(&image_data_url)?;
+        let temp_file_path = std::env::temp_dir().join(format!(
+            "elbarato-label-{}.png",
+            Uuid::new_v4()
+        ));
+
+        fs::write(&temp_file_path, png_bytes)
+            .map_err(|error| format!("No se pudo preparar la imagen temporal de la etiqueta: {error}"))?;
+
+        let safe_printer = escape_powershell_single_quoted(&target_printer);
+        let safe_image_path =
+            escape_powershell_single_quoted(&temp_file_path.to_string_lossy());
+        let safe_copies = copies.unwrap_or(1).clamp(1, 200);
+        let safe_width_mm = width_mm.unwrap_or(50).clamp(20, 120);
+        let safe_height_mm = height_mm.unwrap_or(30).clamp(20, 120);
+
+        let script = format!(
+            r#"$ErrorActionPreference='Stop';
+Add-Type -AssemblyName System.Drawing;
+$imagePath = '{image_path}';
+$printerName = '{printer_name}';
+$copies = {copies};
+$labelWidthMm = {width_mm};
+$labelHeightMm = {height_mm};
+
+if (!(Test-Path $imagePath)) {{
+  throw 'No se encontro la imagen temporal de la etiqueta.'
+}}
+
+$image = [System.Drawing.Image]::FromFile($imagePath);
+$printDoc = New-Object System.Drawing.Printing.PrintDocument;
+$printDoc.PrinterSettings.PrinterName = $printerName;
+if (-not $printDoc.PrinterSettings.IsValid) {{
+  throw "Impresora invalida: $printerName"
+}}
+$printDoc.PrinterSettings.Copies = [int16]$copies;
+$paperWidth = [math]::Round(($labelWidthMm / 25.4) * 100);
+$paperHeight = [math]::Round(($labelHeightMm / 25.4) * 100);
+$paperSize = New-Object System.Drawing.Printing.PaperSize('Etiqueta', [int]$paperWidth, [int]$paperHeight);
+$printDoc.DefaultPageSettings.PaperSize = $paperSize;
+$printDoc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0);
+$printDoc.OriginAtMargins = $false;
+$printDoc.DefaultPageSettings.Landscape = $false;
+
+$handler = [System.Drawing.Printing.PrintPageEventHandler]{{
+  param($sender, $e)
+  $bounds = $e.PageBounds
+  $e.Graphics.Clear([System.Drawing.Color]::White)
+  $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+  $e.Graphics.DrawImage($image, $bounds)
+  $e.HasMorePages = $false
+}};
+
+$printDoc.add_PrintPage($handler);
+try {{
+  $printDoc.Print();
+}} finally {{
+  $printDoc.remove_PrintPage($handler);
+  $printDoc.Dispose();
+  $image.Dispose();
+}}
+"#,
+            image_path = safe_image_path,
+            printer_name = safe_printer,
+            copies = safe_copies,
+            width_mm = safe_width_mm,
+            height_mm = safe_height_mm,
+        );
+
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("No se pudo iniciar la impresion de etiquetas: {error}"));
+
+        let result = match output {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let detail = if !stderr.is_empty() { stderr } else { stdout };
+                Err(format!("No se pudo imprimir la etiqueta: {detail}"))
+            }
+            Err(error) => Err(error),
+        };
+
+        let _ = fs::remove_file(&temp_file_path);
+        result
     }
 }

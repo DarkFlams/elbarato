@@ -16,6 +16,7 @@ BEGIN
   ) THEN
     CREATE TYPE inventory_movement_reason AS ENUM (
       'sale',
+      'sale_void',
       'manual_adjustment',
       'initial_stock',
       'restock',
@@ -23,6 +24,7 @@ BEGIN
     );
   ELSE
     ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'sale';
+    ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'sale_void';
     ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'manual_adjustment';
     ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'initial_stock';
     ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'restock';
@@ -44,6 +46,7 @@ BEGIN
     SET reason = 'manual_adjustment'
     WHERE reason::text NOT IN (
       'sale',
+      'sale_void',
       'manual_adjustment',
       'initial_stock',
       'restock',
@@ -71,6 +74,10 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by UUID;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS void_reason TEXT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x3 NUMERIC(10,2);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x6 NUMERIC(10,2);
@@ -96,6 +103,11 @@ UPDATE cash_sessions SET opening_cash = 0 WHERE opening_cash < 0;
 UPDATE cash_sessions SET closing_cash = 0 WHERE closing_cash < 0;
 
 UPDATE sales SET total = 0 WHERE total < 0;
+UPDATE sales
+SET status = 'completed'
+WHERE status IS NULL
+   OR trim(status) = '';
+
 UPDATE sales
 SET payment_method = 'cash'
 WHERE payment_method IS NULL
@@ -186,6 +198,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sales_payment_method_valid') THEN
     ALTER TABLE sales
     ADD CONSTRAINT sales_payment_method_valid CHECK (payment_method IN ('cash', 'transfer'));
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sales_status_valid') THEN
+    ALTER TABLE sales
+    ADD CONSTRAINT sales_status_valid CHECK (status IN ('completed', 'voided'));
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sales_amount_received_nonnegative') THEN

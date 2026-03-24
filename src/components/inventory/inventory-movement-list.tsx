@@ -60,6 +60,7 @@ const FILTERS: { value: MovementFilter; label: string }[] = [
 
 const REASON_LABEL: Record<string, string> = {
   sale: "Venta",
+  sale_void: "Anulacion",
   restock: "Alta",
   manual_adjustment: "Baja manual",
   return: "Devolucion",

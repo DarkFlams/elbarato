@@ -6,7 +6,8 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   ShoppingBag,
   FilterX,
@@ -14,7 +15,6 @@ import {
   Loader2,
   ReceiptText,
   Download,
-  FileText,
   Wallet,
   TrendingDown,
   TrendingUp,
@@ -22,6 +22,8 @@ import {
   Receipt,
   Users,
   User,
+  LayoutGrid,
+  CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +47,11 @@ import {
 } from "@/lib/timezone-ecuador";
 
 interface ExpenseWithAllocations extends Expense {
-  expense_allocations: ExpenseAllocation[];
+  expense_allocations: Array<
+    ExpenseAllocation & {
+      partner?: Partner | null;
+    }
+  >;
 }
 
 interface VentasPageViewState {
@@ -58,8 +64,34 @@ interface VentasPageViewState {
 
 const VENTAS_PAGE_VIEW_STATE_KEY = "dashboard:ventas:page:v1";
 
+function parseDateInputParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function shiftDateInput(value: string, deltaDays: number) {
+  const anchor = new Date(`${value}T12:00:00-05:00`);
+  anchor.setUTCDate(anchor.getUTCDate() + deltaDays);
+  return toEcuadorDateInput(anchor.toISOString());
+}
+
+function toSafeFilenamePart(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+}
+
 import type { SaleDetailData } from "@/components/sales/sale-detail-drawer";
-import { exportSalesToExcel, exportSalesToPdf, type SaleExportData } from "@/lib/export-utils";
+import { exportConsolidatedPdf, exportConsolidatedExcel, type ConsolidatedDayData } from "@/lib/export-utils";
 
 import {
   Dialog,
@@ -67,9 +99,20 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
+import { useCartStore } from "@/hooks/use-cart";
+import { getCatalogProductsByIds } from "@/lib/local/catalog";
+import { voidSaleLocalFirst } from "@/lib/local/sales";
+import type { CartItem, PriceTier } from "@/types/database";
+
+type SaleActionMode = "void" | "void-and-copy";
 
 export default function VentasPage() {
+  const router = useRouter();
+  const openTabWithDraft = useCartStore((state) => state.openTabWithDraft);
   const [sales, setSales] = useState<SaleDetailData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [fromDate, setFromDate] = useState(() => toEcuadorDateInput(new Date()));
@@ -79,6 +122,9 @@ export default function VentasPage() {
   const [filterPartner, setFilterPartner] = useState<string | null>(null);
   const [viewStateRestored, setViewStateRestored] = useState(false);
   const [showCustomDates, setShowCustomDates] = useState(false);
+  const [pendingSaleAction, setPendingSaleAction] = useState<SaleActionMode | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [isSubmittingSaleAction, setIsSubmittingSaleAction] = useState(false);
 
   // Estados nuevos para Liquidación (Cintillo)
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -263,7 +309,165 @@ export default function VentasPage() {
     }
   }, [filteredSales.length, selectedIndex]);
 
-  const totalFilteredAmount = filteredSales.reduce((sum, s) => sum + s.displayTotal, 0);
+  const selectedSale =
+    selectedIndex === null ? null : (filteredSales[selectedIndex] ?? null);
+  const activeFilteredSales = filteredSales.filter((sale) => sale.status !== "voided");
+  const totalFilteredAmount = activeFilteredSales.reduce(
+    (sum, sale) => sum + sale.displayTotal,
+    0
+  );
+
+  const closeSaleActionDialog = () => {
+    if (isSubmittingSaleAction) return;
+    setPendingSaleAction(null);
+    setVoidReason("");
+  };
+
+  const openSaleActionDialog = (mode: SaleActionMode) => {
+    if (!selectedSale || selectedSale.status === "voided") return;
+
+    setPendingSaleAction(mode);
+    setVoidReason(
+      mode === "void-and-copy" ? "Correccion de ticket" : "Anulacion manual"
+    );
+  };
+
+  const buildReplacementDraftItems = async (sale: SaleDetailData) => {
+    const sourceItems = sale.sale_items;
+    const productIds = sourceItems.map((item) => item.product_id).filter(Boolean);
+    const catalogProducts = await getCatalogProductsByIds(productIds);
+    const productsById = new Map(catalogProducts.map((product) => [product.id, product]));
+    const restoredQuantities = new Map<string, number>();
+
+    for (const item of sourceItems) {
+      restoredQuantities.set(
+        item.product_id,
+        (restoredQuantities.get(item.product_id) ?? 0) + item.quantity
+      );
+    }
+
+    const missingProducts: string[] = [];
+    const inactiveProducts: string[] = [];
+
+    const draftItems = sourceItems.reduce<CartItem[]>((acc, item) => {
+      const product = productsById.get(item.product_id);
+      if (!product) {
+        missingProducts.push(item.product_name);
+        return acc;
+      }
+
+      if (!product.is_active) {
+        inactiveProducts.push(product.name);
+        return acc;
+      }
+
+      const tier = (item.price_tier ?? "normal") as PriceTier;
+      acc.push({
+        id:
+          globalThis.crypto?.randomUUID?.() ??
+          `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        product_id: product.id,
+        barcode: product.barcode,
+        sku: product.sku,
+        name: product.name,
+        owner_id: product.owner_id,
+        owner_name: product.owner.name,
+        owner_display_name: product.owner.display_name,
+        owner_color: product.owner.color_hex,
+        available_stock:
+          Number(product.stock ?? 0) + (restoredQuantities.get(item.product_id) ?? 0),
+        sale_price: product.sale_price,
+        sale_price_x3: product.sale_price_x3,
+        sale_price_x6: product.sale_price_x6,
+        sale_price_x12: product.sale_price_x12,
+        unit_price: item.unit_price,
+        price_tier: tier,
+        price_override: item.unit_price,
+        quantity: item.quantity,
+        subtotal: item.subtotal,
+      });
+      return acc;
+    }, []);
+
+    if (missingProducts.length > 0) {
+      throw new Error(
+        `No se pudo preparar la copia. Faltan productos actuales: ${missingProducts.join(", ")}`
+      );
+    }
+
+    if (inactiveProducts.length > 0) {
+      throw new Error(
+        `No se pudo preparar la copia. Hay productos inactivos: ${inactiveProducts.join(", ")}`
+      );
+    }
+
+    if (draftItems.length === 0) {
+      throw new Error("El ticket no tiene items validos para copiar");
+    }
+
+    return draftItems;
+  };
+
+  const handleConfirmSaleAction = async () => {
+    if (!selectedSale || !pendingSaleAction) return;
+
+    const trimmedReason = voidReason.trim();
+    if (!trimmedReason) {
+      toast.error("Debes indicar el motivo de la anulacion");
+      return;
+    }
+
+    setIsSubmittingSaleAction(true);
+
+    try {
+      const replacementDraftItems =
+        pendingSaleAction === "void-and-copy"
+          ? await buildReplacementDraftItems(selectedSale)
+          : null;
+
+      const result = await voidSaleLocalFirst({
+        saleId: selectedSale.id,
+        reason: trimmedReason,
+      });
+
+      if (pendingSaleAction === "void-and-copy" && replacementDraftItems) {
+        openTabWithDraft({
+          items: replacementDraftItems,
+          paymentMethod:
+            selectedSale.payment_method === "cash" ||
+            selectedSale.payment_method === "transfer"
+              ? selectedSale.payment_method
+              : null,
+          notes: `Correccion de ticket #${selectedSale.id.slice(0, 8).toUpperCase()}`,
+        });
+
+        toast.success("Ticket anulado y copiado", {
+          description:
+            result.mode === "local"
+              ? "Se abrio una nueva venta para corregir el ticket."
+              : "La copia editable ya esta lista en Punto de Venta.",
+        });
+
+        closeSaleActionDialog();
+        router.push("/caja");
+        await fetchSales();
+        return;
+      }
+
+      toast.success("Ticket anulado", {
+        description: "El ticket quedo marcado como anulado y el stock fue restaurado.",
+      });
+      closeSaleActionDialog();
+      await fetchSales();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "No se pudo anular el ticket";
+      toast.error("Error al anular ticket", { description: message });
+      console.error("[VentasPage] handleConfirmSaleAction error:", error);
+    } finally {
+      setIsSubmittingSaleAction(false);
+    }
+  };
 
   // ==========================================
   // Navegación por teclado
@@ -325,43 +529,167 @@ export default function VentasPage() {
     return Array.from(map.values());
   };
 
-  const prepareExportData = (): SaleExportData[] => {
-    return filteredSales.map((sale) => {
-      const uniqueOwners = getUniqueOwnersConfigs(sale.displayItems);
-      const ownerNames = uniqueOwners.length > 0 
-        ? uniqueOwners.map(o => o.displayName).join(", ") 
-        : "Sin especificar";
+  // ==========================================
+  // Resumen Consolidado: datos + exportación
+  // ==========================================
+  const [resumenPopover, setResumenPopover] = useState<"pdf" | "excel" | null>(null);
+  const [resumenCustomFrom, setResumenCustomFrom] = useState("");
+  const [resumenCustomTo, setResumenCustomTo] = useState("");
+  const resumenDropdownRef = useRef<HTMLDivElement>(null);
 
-      const productsSummary = sale.displayItems
-        .map((item) => `${item.quantity}x ${item.product_name}`)
-        .join(", ");
-      
-      return {
-        id: sale.id.slice(0, 8),
-        date: fmtDate(sale.created_at),
-        time: fmtTime(sale.created_at),
-        partner: ownerNames,
-        products: productsSummary || "Sin items detallados",
-        method: sale.payment_method === "cash" ? "Efectivo" : "Transferencia",
-        total: sale.displayTotal,
-      };
-    });
+  useEffect(() => {
+    if (!resumenPopover) return;
+    const handler = (e: MouseEvent) => {
+      if (resumenDropdownRef.current && !resumenDropdownRef.current.contains(e.target as Node)) {
+        setResumenPopover(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [resumenPopover]);
+
+  const buildConsolidatedDays = (
+    sourceSales: SaleDetailData[],
+    sourceExpenses: ExpenseWithAllocations[],
+    rangeFrom: string,
+    rangeTo: string
+  ) => {
+    const dayMap = new Map<string, ConsolidatedDayData>();
+    for (const sale of sourceSales) {
+      if (sale.status === "voided") continue;
+      const datePart = toEcuadorDateInput(sale.created_at);
+      if (datePart < rangeFrom || datePart > rangeTo) continue;
+      // Filtrar items por socia si hay filtro activo
+      const items = filterPartner
+        ? sale.sale_items.filter(item => getPartnerConfigFromPartner(item.partner).key === filterPartner)
+        : sale.sale_items;
+      if (items.length === 0) continue;
+      if (!dayMap.has(datePart)) {
+        const d = new Date(datePart + "T12:00:00-05:00");
+        const label = formatEcuadorDate(d.toISOString(), { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+        dayMap.set(datePart, { dateLabel: label, products: [], expenses: [], totalSales: 0, totalExpenses: 0 });
+      }
+      const day = dayMap.get(datePart)!;
+      for (const item of items) {
+        const pName = item.product_name || "Desconocido";
+        let existing = day.products.find((p) => p.productName === pName);
+        if (!existing) { existing = { productName: pName, quantity: 0, total: 0 }; day.products.push(existing); }
+        existing.quantity += item.quantity;
+        existing.total += item.subtotal;
+        day.totalSales += item.subtotal;
+      }
+    }
+
+    for (const exp of sourceExpenses) {
+      const datePart = toEcuadorDateInput(exp.created_at);
+      if (datePart < rangeFrom || datePart > rangeTo) continue;
+
+      const expenseAmount = filterPartner
+        ? exp.expense_allocations
+            ?.filter(
+              (allocation) =>
+                allocation.partner &&
+                getPartnerConfigFromPartner(allocation.partner).key === filterPartner
+            )
+            .reduce((sum, allocation) => sum + Number(allocation.amount || 0), 0) ?? 0
+        : Number(exp.amount || 0);
+
+      if (expenseAmount <= 0) continue;
+
+      if (!dayMap.has(datePart)) {
+        const d = new Date(datePart + "T12:00:00-05:00");
+        const label = formatEcuadorDate(d.toISOString(), { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+        dayMap.set(datePart, { dateLabel: label, products: [], expenses: [], totalSales: 0, totalExpenses: 0 });
+      }
+      const day = dayMap.get(datePart)!;
+      day.expenses.push({ description: exp.description, amount: expenseAmount });
+      day.totalExpenses += expenseAmount;
+    }
+    return Array.from(dayMap.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
   };
 
-  const getLiquidationData = () => ({
-    totalSales,
-    totalExpenses: totalExpensesAmount,
-    netIncome,
-    partnerName: filterPartner ? getPartnerConfig({ name: filterPartner }).displayName : "Todas las Socias",
-    expensesDetail: myExpenses.map(e => ({ description: e.description, amount: e.amount, date: e.date }))
-  });
+  const getDateRange = (preset: "hoy" | "semana" | "mes" | "custom"): [string, string] => {
+    const todayStr = toEcuadorDateInput(new Date());
+    if (preset === "hoy") return [todayStr, todayStr];
 
-  const handleExportExcel = () => {
-    exportSalesToExcel(prepareExportData(), getLiquidationData());
+    if (preset === "semana") {
+      const anchor = new Date(`${todayStr}T12:00:00-05:00`);
+      const dayOfWeek = anchor.getUTCDay(); // 0=sun
+      const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const mon = shiftDateInput(todayStr, diffToMon);
+      const sun = shiftDateInput(mon, 6);
+      return [mon, sun];
+    }
+
+    if (preset === "mes") {
+      const parts = parseDateInputParts(todayStr);
+      if (!parts) return [todayStr, todayStr];
+      const lastDay = new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate();
+      return [
+        `${parts.year}-${String(parts.month).padStart(2, "0")}-01`,
+        `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+      ];
+    }
+
+    return [resumenCustomFrom, resumenCustomTo || resumenCustomFrom];
   };
 
-  const handleExportPdf = () => {
-    exportSalesToPdf(prepareExportData(), getLiquidationData());
+  const triggerResumenDownload = async (preset: "hoy" | "semana" | "mes" | "custom") => {
+    const [rf, rt] = getDateRange(preset);
+    if (!rf || !rt) {
+      toast.error("Selecciona una fecha valida para descargar");
+      return;
+    }
+
+    if (rf > rt) {
+      toast.error("La fecha inicial no puede ser mayor que la fecha final");
+      return;
+    }
+
+    try {
+      const [rangeSales, rangeSessions] = await Promise.all([
+        getSalesHistoryLocalFirst(rf, rt),
+        getCashSessionsHistoryLocalFirst(rf, rt),
+      ]);
+
+      const expensesBySession = await Promise.all(
+        rangeSessions.map((session) => getExpensesBySessionLocalFirst(session.id))
+      );
+
+      const uniqueExpenses = Array.from(
+        new Map(
+          expensesBySession
+            .flat()
+            .map((expense) => [expense.id, expense as ExpenseWithAllocations])
+        ).values()
+      );
+
+      const sortedDays = buildConsolidatedDays(rangeSales, uniqueExpenses, rf, rt);
+      if (sortedDays.length === 0) {
+        toast.error("No hay tickets para el rango seleccionado");
+        return;
+      }
+
+      const partnerLabel = filterPartner
+        ? getPartnerConfig({ name: filterPartner }).displayName
+        : "TOTAL";
+      const dateRange = rf === rt ? rf : `${rf} a ${rt}`;
+      const partnerFileLabel =
+        filterPartner && partnerLabel.trim().length > 0 ? partnerLabel : "todas";
+      const rangeFileLabel = rf === rt ? rf : `${rf}_a_${rt}`;
+      const filenameBase = `resumen_${toSafeFilenamePart(partnerFileLabel)}_${rangeFileLabel}`;
+
+      if (resumenPopover === "pdf") {
+        exportConsolidatedPdf(sortedDays, dateRange, partnerLabel, `${filenameBase}.pdf`);
+      } else {
+        await exportConsolidatedExcel(sortedDays, partnerLabel, `${filenameBase}.xlsx`);
+      }
+
+      setResumenPopover(null);
+    } catch (error) {
+      console.error("[VentasPage] resumen download error:", error);
+      toast.error("No se pudo descargar el resumen para ese rango");
+    }
   };
 
   // ==========================================
@@ -421,7 +749,7 @@ export default function VentasPage() {
   const netIncome = totalSales - totalExpensesAmount;
 
   return (
-    <div className="flex flex-col h-full gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -434,15 +762,41 @@ export default function VentasPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleExportExcel} className="h-9">
-            <Download className="h-4 w-4 mr-2" />
-            Excel
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportPdf} className="h-9 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors">
-            <FileText className="h-4 w-4 mr-2" />
-            PDF
-          </Button>
+        <div ref={resumenDropdownRef} className="relative flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => { if (resumenPopover === "pdf") { setResumenPopover(null); } else { setResumenCustomFrom(""); setResumenCustomTo(""); setResumenPopover("pdf"); } }} className="h-9 hover:bg-slate-100 border-slate-300 text-slate-700 transition-colors">
+              <LayoutGrid className="h-4 w-4 mr-2" />
+              Resumen A4
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => { if (resumenPopover === "excel") { setResumenPopover(null); } else { setResumenCustomFrom(""); setResumenCustomTo(""); setResumenPopover("excel"); } }} className="h-9 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-colors">
+              <Download className="h-4 w-4 mr-2" />
+              Resumen Excel
+            </Button>
+          </div>
+          {resumenPopover && (
+            <div className="absolute right-0 top-full mt-2 z-[100] w-72 p-3 rounded-lg bg-white shadow-lg ring-1 ring-black/10 overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+              <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1.5">
+                <CalendarDays className="h-3.5 w-3.5" />
+                {resumenPopover === "pdf" ? "Descargar PDF" : "Descargar Excel"} — Rango
+              </p>
+              <div className="flex flex-col gap-1">
+                {(["hoy", "semana", "mes"] as const).map((p) => (
+                  <button key={p} onClick={() => triggerResumenDownload(p)} className="w-full text-left px-3 py-1.5 text-sm rounded-md hover:bg-slate-100 transition-colors">
+                    {p === "hoy" ? "Hoy" : p === "semana" ? "Esta semana (Lun–Dom)" : "Este mes"}
+                  </button>
+                ))}
+                <div className="border-t my-1" />
+                <p className="text-xs text-slate-400 px-3">Personalizado</p>
+                <div className="flex gap-2 px-3">
+                  <input type="date" value={resumenCustomFrom} onChange={(e) => setResumenCustomFrom(e.target.value)} className="flex-1 min-w-0 border rounded px-1.5 py-1 text-xs bg-white" />
+                  <input type="date" value={resumenCustomTo} onChange={(e) => setResumenCustomTo(e.target.value)} placeholder="Opcional" className="flex-1 min-w-0 border rounded px-1.5 py-1 text-xs bg-white" />
+                </div>
+                <button onClick={() => triggerResumenDownload("custom")} disabled={!resumenCustomFrom} className="mx-3 mt-1 px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                  Descargar
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -645,8 +999,9 @@ export default function VentasPage() {
             </p>
           </div>
         ) : (
-          <div className="flex flex-col flex-1 min-h-0">
-            <ScrollArea className="flex-1">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="min-w-full">
               <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                 <tr>
@@ -689,14 +1044,25 @@ export default function VentasPage() {
                       };
 
                   const isSelected = index === selectedIndex;
+                  const isVoided = sale.status === "voided";
+                  const rowTitle = isVoided && sale.void_reason
+                    ? `Ticket anulado: ${sale.void_reason}`
+                    : undefined;
 
                   return (
                     <tr
                       id={`sale-row-${index}`}
                       key={sale.id}
                       onClick={() => setSelectedIndex(index)}
+                      title={rowTitle}
                       className={`group transition-colors border-b border-slate-100/60 cursor-pointer ${
-                        isSelected ? "bg-indigo-50/60" : "hover:bg-slate-50"
+                        isVoided
+                          ? isSelected
+                            ? "bg-rose-50"
+                            : "bg-rose-50/50 hover:bg-rose-50/70"
+                          : isSelected
+                            ? "bg-indigo-50/60"
+                            : "hover:bg-slate-50"
                       }`}
                     >
                       <td className="px-4 py-1.5 align-middle relative">
@@ -705,37 +1071,87 @@ export default function VentasPage() {
                           className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-md"
                           style={barStyle}
                         />
-                        <span className="block font-mono text-[11px] font-medium text-slate-800 uppercase group-hover:text-amber-700 transition-colors ml-1">
+                        <span
+                          className={`ml-1 block font-mono text-[11px] font-medium uppercase transition-colors ${
+                            isVoided
+                              ? "text-rose-700 line-through decoration-rose-400"
+                              : "text-slate-800 group-hover:text-amber-700"
+                          }`}
+                        >
                           #{sale.id.slice(0, 8)}
                         </span>
                       </td>
                       <td className="px-4 py-1.5 align-middle">
-                        <span className="text-[11px] font-medium text-slate-900 leading-tight block">
+                        <span
+                          className={`block text-[11px] font-medium leading-tight ${
+                            isVoided
+                              ? "text-rose-700 line-through decoration-rose-400"
+                              : "text-slate-900"
+                          }`}
+                        >
                           {fmtDate(sale.created_at)}
                         </span>
                       </td>
                       <td className="px-2 py-1.5 align-middle">
-                        <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                        <span
+                          className={`font-mono text-[11px] tabular-nums ${
+                            isVoided
+                              ? "text-rose-500 line-through decoration-rose-300"
+                              : "text-slate-500"
+                          }`}
+                        >
                           {fmtTime(sale.created_at)}
                         </span>
                       </td>
                       <td className="px-2 py-1.5 text-center align-middle">
-                        <span className="block font-mono text-[13px] font-bold text-slate-900">
+                        <span
+                          className={`block font-mono text-[13px] font-bold ${
+                            isVoided
+                              ? "text-rose-700 line-through decoration-rose-400"
+                              : "text-slate-900"
+                          }`}
+                        >
                           {totalItems}
                         </span>
                       </td>
                       <td className="px-4 py-1.5 align-middle">
-                        <span className="text-[11px] text-slate-600 truncate block max-w-[250px]" title={sale.displayItems.map((item) => `${item.quantity}x ${item.product_name}`).join(", ")}>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`block max-w-[250px] truncate text-[11px] ${
+                              isVoided
+                                ? "text-rose-600 line-through decoration-rose-300"
+                                : "text-slate-600"
+                            }`}
+                            title={sale.displayItems.map((item) => `${item.quantity}x ${item.product_name}`).join(", ")}
+                          >
                           {productsSummary || <span className="text-[10px] text-slate-300 italic">-</span>}
-                        </span>
+                          </span>
+                          {isVoided ? (
+                            <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-rose-700">
+                              Anulado
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-4 py-1.5 align-middle">
-                        <span className="text-[10px] font-semibold uppercase tracking-tighter text-slate-500">
+                        <span
+                          className={`text-[10px] font-semibold uppercase tracking-tighter ${
+                            isVoided
+                              ? "text-rose-500 line-through decoration-rose-300"
+                              : "text-slate-500"
+                          }`}
+                        >
                           {sale.payment_method === "cash" ? "Efectivo" : "Transfer."}
                         </span>
                       </td>
                       <td className="px-4 py-1.5 text-right align-middle">
-                        <span className="font-mono text-[13px] font-bold tabular-nums text-slate-900">
+                        <span
+                          className={`font-mono text-[13px] font-bold tabular-nums ${
+                            isVoided
+                              ? "text-rose-700 line-through decoration-rose-400"
+                              : "text-slate-900"
+                          }`}
+                        >
                           ${sale.displayTotal.toFixed(2)}
                         </span>
                       </td>
@@ -744,74 +1160,192 @@ export default function VentasPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </ScrollArea>
           
-          <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-end gap-6 shrink-0 mt-auto shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
-            <span className="font-semibold text-slate-600 uppercase text-sm tracking-wide">
-              Total ({filteredSales.length} tickets)
-            </span>
-            <span className="font-bold text-xl text-slate-900 font-mono">
-              ${totalFilteredAmount.toFixed(2)}
-            </span>
+          <div className="sticky bottom-0 z-10 mt-auto flex shrink-0 items-center justify-between gap-4 border-t border-slate-200 bg-slate-50 px-6 py-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800 disabled:border-slate-200 disabled:text-slate-400"
+                disabled={!selectedSale || selectedSale.status === "voided" || isSubmittingSaleAction}
+                onClick={() => openSaleActionDialog("void")}
+              >
+                Anular ticket
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 border-amber-200 text-amber-800 hover:bg-amber-50 hover:text-amber-900 disabled:border-slate-200 disabled:text-slate-400"
+                disabled={!selectedSale || selectedSale.status === "voided" || isSubmittingSaleAction}
+                onClick={() => openSaleActionDialog("void-and-copy")}
+              >
+                Anular y copiar
+              </Button>
+              <span className="text-xs text-slate-400">
+                {selectedSale
+                  ? selectedSale.status === "voided"
+                    ? "El ticket seleccionado ya esta anulado."
+                    : `Ticket #${selectedSale.id.slice(0, 8).toUpperCase()} seleccionado.`
+                  : "Selecciona un ticket para anularlo o corregirlo."}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-6">
+              <span className="font-semibold text-slate-600 uppercase text-sm tracking-wide">
+                Total ({activeFilteredSales.length} tickets vigentes)
+              </span>
+              <span className="font-bold text-xl text-slate-900 font-mono">
+                ${totalFilteredAmount.toFixed(2)}
+              </span>
+            </div>
           </div>
         </div>
         )}
       </div>
 
       {!isLoading && (
-        <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-slate-50/70 px-4 py-2.5">
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Total Ventas
               </p>
-              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-slate-900">
+              <h3 className="mt-1 font-mono text-[1.45rem] font-semibold leading-none text-slate-800">
                 ${totalSales.toFixed(2)}
               </h3>
             </div>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-              <TrendingUp className="h-4 w-4" />
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
+              <TrendingUp className="h-3.5 w-3.5" />
             </div>
           </div>
 
           <button
             onClick={() => setShowExpensesDrawer(true)}
-            className="group relative flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-colors hover:border-red-200"
+            className="group relative flex items-center justify-between rounded-lg border border-slate-200/80 bg-slate-50/70 px-4 py-2.5 text-left transition-colors hover:border-slate-300"
           >
             <div className="min-w-0">
-              <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Gastos a Deducir
-                <Info className="h-3.5 w-3.5 text-slate-400 transition-colors group-hover:text-red-400" />
+                <Info className="h-3.5 w-3.5 text-slate-400 transition-colors group-hover:text-slate-500" />
               </p>
-              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-red-600">
+              <h3 className="mt-1 font-mono text-[1.45rem] font-semibold leading-none text-rose-600">
                 -${totalExpensesAmount.toFixed(2)}
               </h3>
             </div>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
-              <TrendingDown className="h-4 w-4" />
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-500">
+              <TrendingDown className="h-3.5 w-3.5" />
             </div>
-            <div className="pointer-events-none absolute inset-0 rounded-lg bg-red-50/0 transition-colors group-hover:bg-red-50/50" />
+            <div className="pointer-events-none absolute inset-0 rounded-lg bg-slate-100/0 transition-colors group-hover:bg-slate-100/60" />
           </button>
 
-          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-slate-50/70 px-4 py-2.5">
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Liquidación Neta
               </p>
-              <h3 className="mt-1 font-mono text-[1.9rem] font-bold leading-none text-slate-900">
+              <h3 className="mt-1 font-mono text-[1.45rem] font-semibold leading-none text-slate-800">
                 ${netIncome.toFixed(2)}
               </h3>
             </div>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700">
-              <Wallet className="h-4 w-4" />
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-slate-500">
+              <Wallet className="h-3.5 w-3.5" />
             </div>
           </div>
         </div>
       )}
 
+      <Dialog
+        open={pendingSaleAction !== null}
+        onOpenChange={(open) => {
+          if (!open) closeSaleActionDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton={!isSubmittingSaleAction}>
+          <DialogHeader>
+            <DialogTitle>
+              {pendingSaleAction === "void-and-copy"
+                ? "Anular y copiar ticket"
+                : "Anular ticket"}
+            </DialogTitle>
+            <DialogDescription>
+              {pendingSaleAction === "void-and-copy"
+                ? "El ticket actual quedara anulado y se abrira una nueva venta editable con los mismos productos."
+                : "El ticket quedara anulado, seguira visible en el historial y el stock sera restaurado."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              {selectedSale ? (
+                <>
+                  <span className="font-semibold text-slate-900">
+                    Ticket #{selectedSale.id.slice(0, 8).toUpperCase()}
+                  </span>
+                  <span className="mx-2 text-slate-300">•</span>
+                  <span>{fmtDate(selectedSale.created_at)}</span>
+                  <span className="mx-2 text-slate-300">•</span>
+                  <span className="font-mono">${selectedSale.total.toFixed(2)}</span>
+                </>
+              ) : (
+                "Sin ticket seleccionado"
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="void-reason"
+                className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500"
+              >
+                Motivo
+              </label>
+              <Textarea
+                id="void-reason"
+                value={voidReason}
+                onChange={(event) => setVoidReason(event.target.value)}
+                placeholder="Ej. error de talla, cambio de precio, ticket mal registrado..."
+                className="min-h-[96px] resize-none"
+                disabled={isSubmittingSaleAction}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={closeSaleActionDialog}
+              disabled={isSubmittingSaleAction}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void handleConfirmSaleAction()}
+              disabled={!selectedSale || !voidReason.trim() || isSubmittingSaleAction}
+              className={
+                pendingSaleAction === "void-and-copy"
+                  ? "bg-amber-600 text-white hover:bg-amber-700"
+                  : "bg-rose-600 text-white hover:bg-rose-700"
+              }
+            >
+              {isSubmittingSaleAction ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Procesando...
+                </>
+              ) : pendingSaleAction === "void-and-copy" ? (
+                "Anular y abrir copia"
+              ) : (
+                "Confirmar anulacion"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Drawer Metadatos de Gastos */}
       <Dialog open={showExpensesDrawer} onOpenChange={setShowExpensesDrawer}>
-        <DialogContent className="sm:max-w-md max-h-[85vh] p-0 overflow-hidden flex flex-col">
+        <DialogContent className="sm:max-w-md flex max-h-[85vh] min-h-0 flex-col overflow-hidden p-0">
           <DialogHeader className="p-6 pb-2">
             <DialogTitle className="flex items-center gap-2 text-xl font-bold text-slate-900">
               <Receipt className="h-5 w-5 text-red-500" />
@@ -824,7 +1358,7 @@ export default function VentasPage() {
             </DialogDescription>
           </DialogHeader>
           
-          <ScrollArea className="flex-1 px-6 pb-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
             {myExpenses.length === 0 ? (
               <div className="text-center py-8 text-slate-400 flex flex-col items-center gap-2">
                 <Receipt className="h-10 w-10 opacity-20" />
@@ -853,7 +1387,7 @@ export default function VentasPage() {
                 ))}
               </div>
             )}
-          </ScrollArea>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

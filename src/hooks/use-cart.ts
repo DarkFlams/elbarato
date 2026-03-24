@@ -35,6 +35,13 @@ interface CartStoreState {
   activeTabId: string;
   nextTabNumber: number;
   openTab: () => string;
+  openTabWithDraft: (draft: {
+    items: CartItem[];
+    selectedPriceTier?: SelectablePriceTier;
+    paymentMethod?: PaymentMethod | null;
+    notes?: string;
+    amountReceived?: string;
+  }) => string;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   addItem: (
@@ -189,6 +196,31 @@ export const useCartStore = create<CartStoreState>()(
 
         set((state) => {
           const nextDraft = buildDraft(state.tabs.length + 1);
+          const nextTabs = relabelDrafts([...state.tabs, nextDraft]);
+          nextTabId = nextDraft.id;
+
+          return {
+            tabs: nextTabs,
+            activeTabId: nextDraft.id,
+            nextTabNumber: nextTabs.length + 1,
+          };
+        });
+
+        return nextTabId;
+      },
+
+      openTabWithDraft: (draft) => {
+        let nextTabId = "";
+
+        set((state) => {
+          const nextDraft = touchDraft(buildDraft(state.tabs.length + 1), {
+            items: draft.items,
+            selectedPriceTier: draft.selectedPriceTier ?? "normal",
+            paymentMethod: draft.paymentMethod ?? null,
+            notes: draft.notes ?? "",
+            amountReceived: draft.amountReceived ?? "",
+            isProcessing: false,
+          });
           const nextTabs = relabelDrafts([...state.tabs, nextDraft]);
           nextTabId = nextDraft.id;
 
@@ -639,6 +671,7 @@ export function useCart() {
   const activeTabId = useCartStore((state) => state.activeTabId);
   const nextTabNumber = useCartStore((state) => state.nextTabNumber);
   const openTab = useCartStore((state) => state.openTab);
+  const openTabWithDraft = useCartStore((state) => state.openTabWithDraft);
   const closeTab = useCartStore((state) => state.closeTab);
   const setActiveTab = useCartStore((state) => state.setActiveTab);
   const addItem = useCartStore((state) => state.addItem);
@@ -675,6 +708,7 @@ export function useCart() {
     notes: activeTab.notes,
     amountReceived: activeTab.amountReceived,
     openTab,
+    openTabWithDraft,
     closeTab,
     setActiveTab,
     addItem,

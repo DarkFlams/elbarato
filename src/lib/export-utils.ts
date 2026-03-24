@@ -645,3 +645,341 @@ export function exportSalesToPdf(sales: SaleExportData[], liquidation: Liquidati
   const fname = filename || `Ventas_${toEcuadorDateInput(new Date())}.pdf`;
   doc.save(fname);
 }
+
+// ============================================
+// CONSOLIDATED DAILY REPORT PDF
+// ============================================
+
+export interface ConsolidatedDayData {
+  dateLabel: string;
+  products: { productName: string; quantity: number; total: number }[];
+  expenses: { description: string; amount: number }[];
+  totalSales: number;
+  totalExpenses: number;
+}
+
+export function exportConsolidatedPdf(
+  days: ConsolidatedDayData[],
+  dateRange: string,
+  partnerLabel: string,
+  filename?: string,
+) {
+  const doc = new jsPDF({ orientation: "landscape" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const m = 8;
+  const gap = 6;
+  const colW = (pageW - m * 2 - gap) / 2;
+  const usableH = pageH - m * 2;
+  let col = 0;
+  let y = m;
+
+  const ROW_H = 5.0;
+  const HEAD_H = 5;
+  const TBL_HEAD_H = 5;
+  const GASTOS_LBL_H = 4;
+  const SUMMARY_H = ROW_H * 3 + 3;
+
+  const xOf = (c: number) => m + c * (colW + gap);
+
+  // Máximo de filas de datos que caben en una columna completa
+  const maxRowsPerCol = Math.floor((usableH - HEAD_H - TBL_HEAD_H - SUMMARY_H - 6) / ROW_H) - 1;
+
+  const tblOpts = {
+    theme: "grid" as const,
+    headStyles: { fillColor: [255, 255, 255] as [number,number,number], textColor: [0,0,0] as [number,number,number], fontStyle: "bold" as const, fontSize: 6.5, cellPadding: 1, lineColor: [0,0,0] as [number,number,number], lineWidth: 0.3 },
+    styles: { fontSize: 6.5, cellPadding: 1, lineColor: [0,0,0] as [number,number,number], lineWidth: 0.2, textColor: [0,0,0] as [number,number,number] },
+  };
+
+  const salesColStyles = { 0: { halign: "center" as const, cellWidth: 8 }, 1: { halign: "center" as const, cellWidth: 9 }, 2: { cellWidth: "auto" as const }, 3: { halign: "right" as const, cellWidth: 18 } };
+  const salesHead = [["ITEM", "CANT", "Etiquetas de fila", partnerLabel.toUpperCase()]];
+
+  // Estima la altura de un día completo (producto + gastos + resumen)
+  const estimateH = (day: ConsolidatedDayData) => {
+    let h = HEAD_H + TBL_HEAD_H + (day.products.length + 1) * ROW_H;
+    if (day.expenses.length > 0) h += GASTOS_LBL_H + TBL_HEAD_H + (day.expenses.length + 1) * ROW_H;
+    h += SUMMARY_H + 6;
+    return h;
+  };
+
+  // Renderiza tabla de gastos + resumen neto en la posición (cx, startY)
+  const renderGastosAndSummary = (day: ConsolidatedDayData, cx: number, startY: number) => {
+    let curY = startY;
+    if (day.expenses.length > 0) {
+      doc.setFontSize(6.5);
+      doc.setFont("helvetica", "bold");
+      doc.text("GASTOS", cx + colW / 2, curY + 3, { align: "center" });
+      curY += 4;
+      const eb = day.expenses.map((e, i) => [String(i + 1), e.description.toUpperCase(), e.amount.toFixed(2)]);
+      eb.push(["", "Total gastos", day.totalExpenses.toFixed(2)]);
+      autoTable(doc, { startY: curY, margin: { left: cx, right: pageW - cx - colW }, tableWidth: colW, head: [["#", "Gasto", "Monto"]], body: eb, ...tblOpts, columnStyles: { 0: { halign: "center", cellWidth: 6 }, 2: { halign: "right", cellWidth: 18 } }, didParseCell: (d) => { if (d.row.index === eb.length - 1) d.cell.styles.fontStyle = "bold"; } });
+      curY = (doc as any).lastAutoTable.finalY + 1;
+    }
+    const net = day.totalSales - day.totalExpenses;
+    autoTable(doc, { startY: curY, margin: { left: cx, right: pageW - cx - colW }, tableWidth: colW, body: [["TOTAL INGRESOS", day.totalSales.toFixed(2)], ["TOTAL GASTOS", `-${day.totalExpenses.toFixed(2)}`], ["NETO DEL DÍA", net.toFixed(2)]], theme: "grid", styles: { fontSize: 6.5, cellPadding: 1, fontStyle: "bold", lineColor: [0,0,0] as [number,number,number], lineWidth: 0.2, textColor: [0,0,0] as [number,number,number] }, columnStyles: { 0: { cellWidth: "auto" }, 1: { halign: "right", cellWidth: 18 } }, didParseCell: (d) => { if (d.row.index === 1 && d.column.index === 1) d.cell.styles.textColor = [200, 0, 0]; if (d.row.index === 2) d.cell.styles.fillColor = [230, 230, 230]; } });
+    return (doc as any).lastAutoTable.finalY;
+  };
+
+  for (const day of days) {
+    const totalH = estimateH(day);
+    const fitsInOneCol = totalH <= usableH;
+    const spaceLeft = usableH - (y - m);
+
+    if (fitsInOneCol) {
+      // === DÍA CORTO: cabe en una sola columna ===
+      if (spaceLeft < totalH) {
+        // No cabe aquí, ir al siguiente slot
+        if (col === 0) { col = 1; y = m; }
+        else { doc.addPage(); col = 0; y = m; }
+      }
+      const cx = xOf(col);
+
+      // Titulo
+      doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(0);
+      doc.text(day.dateLabel.toUpperCase(), cx + colW / 2, y + 3, { align: "center" });
+      y += 5;
+
+      // Tabla ventas
+      const body = day.products.map((p, i) => [String(i + 1), String(p.quantity), p.productName.toUpperCase(), p.total.toFixed(2)]);
+      body.push([String(day.products.length + 1), "#N/D", "Total general", day.totalSales.toFixed(2)]);
+      autoTable(doc, { startY: y, margin: { left: cx, right: pageW - cx - colW }, tableWidth: colW, head: salesHead, body, ...tblOpts, columnStyles: salesColStyles, didParseCell: (d) => { if (d.row.index === body.length - 1) d.cell.styles.fontStyle = "bold"; } });
+      y = (doc as any).lastAutoTable.finalY + 1;
+
+      // Gastos + resumen
+      y = renderGastosAndSummary(day, cx, y) + 6;
+
+    } else {
+      // === DÍA LARGO: necesita 2 columnas en la misma página ===
+      // Siempre empezar en columna izquierda de una página nueva/limpia
+      if (col !== 0 || y > m + 2) {
+        doc.addPage();
+        col = 0;
+        y = m;
+      }
+
+      // Llenar columna izquierda al máximo primero
+      const leftMaxRows = Math.floor((usableH - HEAD_H - TBL_HEAD_H) / ROW_H);
+      const leftProducts = Math.min(leftMaxRows, day.products.length);
+
+      const leftItems = day.products.slice(0, leftProducts);
+      const rightItems = day.products.slice(leftProducts);
+
+      // --- COLUMNA IZQUIERDA ---
+      const cxL = xOf(0);
+      doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(0);
+      doc.text(day.dateLabel.toUpperCase(), cxL + colW / 2, y + 3, { align: "center" });
+      y += 5;
+
+      if (leftItems.length > 0) {
+        const bodyL = leftItems.map((p, i) => [String(i + 1), String(p.quantity), p.productName.toUpperCase(), p.total.toFixed(2)]);
+        autoTable(doc, { startY: y, margin: { left: cxL, right: pageW - cxL - colW }, tableWidth: colW, head: salesHead, body: bodyL, ...tblOpts, columnStyles: salesColStyles });
+      }
+
+      // --- COLUMNA DERECHA ---
+      const cxR = xOf(1);
+      let yR = m;
+
+      // Continuar numeración
+      if (rightItems.length > 0) {
+        const bodyR = rightItems.map((p, i) => [String(leftProducts + i + 1), String(p.quantity), p.productName.toUpperCase(), p.total.toFixed(2)]);
+        // Fila Total general
+        bodyR.push([String(day.products.length + 1), "#N/D", "Total general", day.totalSales.toFixed(2)]);
+        autoTable(doc, { startY: yR, margin: { left: cxR, right: pageW - cxR - colW }, tableWidth: colW, head: salesHead, body: bodyR, ...tblOpts, columnStyles: salesColStyles, didParseCell: (d) => { if (d.row.index === bodyR.length - 1) d.cell.styles.fontStyle = "bold"; } });
+        yR = (doc as any).lastAutoTable.finalY + 1;
+      }
+
+      // Gastos + resumen en columna derecha
+      yR = renderGastosAndSummary(day, cxR, yR) + 6;
+
+      // Siguiente día empieza en nueva página
+      doc.addPage();
+      col = 0;
+      y = m;
+    }
+  }
+
+  // Eliminar última página vacía si la hay
+  const pc = doc.getNumberOfPages();
+
+  doc.save(filename || `Resumen_${toEcuadorDateInput(new Date())}.pdf`);
+}
+
+
+// ============================================
+// CONSOLIDATED DAILY REPORT EXCEL
+// ============================================
+
+export async function exportConsolidatedExcel(
+  days: ConsolidatedDayData[],
+  partnerLabel: string,
+  filename?: string,
+) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Resumen", {
+    views: [{ showGridLines: false }],
+  });
+
+  const COLS_PER_BLOCK = 4; // ITEM, CANT, Etiquetas, TOTAL
+  const GAP = 1;            // columna separadora
+  const MAX_BLOCKS = 4;     // 4 días lado a lado
+
+  // Configurar anchos para los 4 bloques
+  for (let b = 0; b < MAX_BLOCKS; b++) {
+    const offset = b * (COLS_PER_BLOCK + GAP);
+    ws.getColumn(offset + 1).width = 5;   // ITEM
+    ws.getColumn(offset + 2).width = 5;   // CANT
+    ws.getColumn(offset + 3).width = 38;  // Etiquetas de fila
+    ws.getColumn(offset + 4).width = 10;  // TOTAL
+    if (b < MAX_BLOCKS - 1) ws.getColumn(offset + 5).width = 1.5; // separador
+  }
+
+  const border: Partial<ExcelJS.Borders> = {
+    top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" },
+  };
+  const bFont: Partial<ExcelJS.Font> = { bold: true, size: 8 };
+  const nFont: Partial<ExcelJS.Font> = { size: 8 };
+
+  // Escribe un día completo verticalmente en startCol, desde startRow.
+  // Retorna la fila final (última fila usada + 1).
+  const writeDay = (day: ConsolidatedDayData, startRow: number, startCol: number): number => {
+    let r = startRow;
+    const c = startCol;
+
+    // Titulo
+    ws.mergeCells(r, c, r, c + 3);
+    const t = ws.getCell(r, c);
+    t.value = day.dateLabel.toUpperCase();
+    t.font = { bold: true, size: 9 };
+    t.alignment = { horizontal: "center" };
+    r++;
+
+    // Cabecera ventas
+    ["ITEM", "CANT", "Etiquetas de fila", partnerLabel.toUpperCase()].forEach((h, i) => {
+      const cell = ws.getCell(r, c + i);
+      cell.value = h;
+      cell.font = bFont;
+      cell.border = border;
+      cell.alignment = { horizontal: i === 3 ? "right" : (i <= 1 ? "center" : "left") };
+    });
+    r++;
+
+    // Productos
+    day.products.forEach((p, idx) => {
+      [idx + 1, p.quantity, p.productName.toUpperCase(), p.total].forEach((v, i) => {
+        const cell = ws.getCell(r, c + i);
+        cell.value = v;
+        cell.font = nFont;
+        cell.border = border;
+        cell.alignment = { horizontal: i === 3 ? "right" : (i <= 1 ? "center" : "left") };
+        if (i === 3 && typeof v === "number") cell.numFmt = "#,##0.00";
+      });
+      r++;
+    });
+
+    // Total general
+    [day.products.length + 1, "#N/D", "Total general", day.totalSales].forEach((v, i) => {
+      const cell = ws.getCell(r, c + i);
+      cell.value = v;
+      cell.font = bFont;
+      cell.border = border;
+      cell.alignment = { horizontal: i === 3 ? "right" : (i <= 1 ? "center" : "left") };
+      if (i === 3 && typeof v === "number") cell.numFmt = "#,##0.00";
+    });
+    r++;
+
+    // Gastos
+    if (day.expenses.length > 0) {
+      ws.mergeCells(r, c, r, c + 3);
+      ws.getCell(r, c).value = "GASTOS";
+      ws.getCell(r, c).font = bFont;
+      ws.getCell(r, c).alignment = { horizontal: "center" };
+      r++;
+
+      // Cabecera gastos
+      ["#", "Gasto", "", "Monto"].forEach((h, i) => {
+        const cell = ws.getCell(r, c + i);
+        cell.value = h || undefined;
+        cell.font = bFont;
+        cell.border = border;
+      });
+      ws.mergeCells(r, c + 1, r, c + 2);
+      r++;
+
+      day.expenses.forEach((e, idx) => {
+        ws.getCell(r, c).value = idx + 1;
+        ws.getCell(r, c).font = nFont;
+        ws.getCell(r, c).border = border;
+        ws.getCell(r, c).alignment = { horizontal: "center" };
+        ws.mergeCells(r, c + 1, r, c + 2);
+        ws.getCell(r, c + 1).value = e.description.toUpperCase();
+        ws.getCell(r, c + 1).font = nFont;
+        ws.getCell(r, c + 1).border = border;
+        ws.getCell(r, c + 3).value = e.amount;
+        ws.getCell(r, c + 3).font = nFont;
+        ws.getCell(r, c + 3).border = border;
+        ws.getCell(r, c + 3).numFmt = "#,##0.00";
+        ws.getCell(r, c + 3).alignment = { horizontal: "right" };
+        r++;
+      });
+
+      // Total gastos
+      ws.mergeCells(r, c, r, c + 2);
+      ws.getCell(r, c).value = "Total gastos";
+      ws.getCell(r, c).font = bFont;
+      ws.getCell(r, c).border = border;
+      ws.getCell(r, c + 3).value = day.totalExpenses;
+      ws.getCell(r, c + 3).font = bFont;
+      ws.getCell(r, c + 3).border = border;
+      ws.getCell(r, c + 3).numFmt = "#,##0.00";
+      ws.getCell(r, c + 3).alignment = { horizontal: "right" };
+      r++;
+    }
+
+    // Resumen neto
+    const net = day.totalSales - day.totalExpenses;
+    ([[" TOTAL INGRESOS", day.totalSales], ["TOTAL GASTOS", -day.totalExpenses], ["NETO DEL DÍA", net]] as [string, number][]).forEach(([label, val], idx) => {
+      ws.mergeCells(r, c, r, c + 2);
+      const lbl = ws.getCell(r, c);
+      lbl.value = label;
+      lbl.font = bFont;
+      lbl.border = border;
+      const vCell = ws.getCell(r, c + 3);
+      vCell.value = val;
+      vCell.font = { ...bFont, color: idx === 1 ? { argb: "FFCC0000" } : undefined };
+      vCell.border = border;
+      vCell.numFmt = "#,##0.00";
+      vCell.alignment = { horizontal: "right" };
+      if (idx === 2) {
+        lbl.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE6E6E6" } };
+        vCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE6E6E6" } };
+      }
+      r++;
+    });
+
+    return r;
+  };
+
+  // Colocar días: 4 lado a lado, nueva fila cuando se llenan las 4 columnas
+  let blockIdx = 0;
+  let rowStart = 1;
+  let maxRowEnd = 1;
+
+  for (const day of days) {
+    const colSlot = blockIdx % MAX_BLOCKS;
+    const startCol = colSlot * (COLS_PER_BLOCK + GAP) + 1;
+
+    if (colSlot === 0 && blockIdx > 0) {
+      rowStart = maxRowEnd + 2; // 2 filas de separación entre filas de bloques
+      maxRowEnd = rowStart;
+    }
+
+    const endRow = writeDay(day, rowStart, startCol);
+    if (endRow > maxRowEnd) maxRowEnd = endRow;
+    blockIdx++;
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  saveAs(blob, filename || `Resumen_${toEcuadorDateInput(new Date())}.xlsx`);
+}
+

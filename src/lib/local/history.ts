@@ -25,6 +25,8 @@ interface LocalExpenseRecord extends Expense {
 
 interface LocalSaleHistoryItem {
   id: string;
+  product_id: string;
+  product_barcode: string;
   product_name: string;
   quantity: number;
   unit_price: number;
@@ -40,6 +42,9 @@ interface LocalSaleHistory {
   created_at: string;
   total: number;
   payment_method: string;
+  status: "completed" | "voided";
+  voided_at?: string | null;
+  void_reason?: string | null;
   sold_by_partner: LocalPartnerRecord | null;
   sale_items: LocalSaleHistoryItem[];
 }
@@ -52,12 +57,27 @@ interface LocalCashSessionReportRow extends CashSessionReport {
   partner_id: string;
 }
 
+function mergeById<T extends { id: string }>(...collections: T[][]) {
+  const merged = new Map<string, T>();
+
+  for (const collection of collections) {
+    for (const item of collection) {
+      merged.set(item.id, item);
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
 function normalizeSale(sale: LocalSaleHistory): SaleDetailData {
   return {
     id: sale.remote_id || sale.id,
     created_at: sale.created_at,
     total: Number(sale.total || 0),
     payment_method: sale.payment_method,
+    status: sale.status === "voided" ? "voided" : "completed",
+    voided_at: sale.voided_at ?? null,
+    void_reason: sale.void_reason ?? null,
     sold_by_partner: sale.sold_by_partner
       ? {
           display_name: sale.sold_by_partner.display_name,
@@ -67,6 +87,8 @@ function normalizeSale(sale: LocalSaleHistory): SaleDetailData {
       : null,
     sale_items: sale.sale_items.map((item) => ({
       id: item.id,
+      product_id: item.product_id,
+      product_barcode: item.product_barcode,
       product_name: item.product_name,
       quantity: Number(item.quantity || 0),
       unit_price: Number(item.unit_price || 0),
@@ -90,11 +112,21 @@ export async function getSalesHistoryLocalFirst(fromDate?: string, toDate?: stri
   }
 
   try {
-    const sales = await invoke<LocalSaleHistory[]>("list_local_sales", {
+    const localSales = await invoke<LocalSaleHistory[]>("list_local_sales", {
       fromDate: fromDate || null,
       toDate: toDate || null,
     });
-    return sales.map(normalizeSale);
+
+    try {
+      const remoteSales = await getSalesHistoryRemote(fromDate, toDate);
+      return mergeById(localSales.map(normalizeSale), remoteSales).sort(
+        (left, right) =>
+          new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+      );
+    } catch (remoteError) {
+      console.warn("[history] remote sales merge skipped:", remoteError);
+      return localSales.map(normalizeSale);
+    }
   } catch (error) {
     if (!isMissingTauriCommandError(error)) throw error;
     return getSalesHistoryRemote(fromDate, toDate);
@@ -111,9 +143,14 @@ async function getSalesHistoryRemote(fromDate?: string, toDate?: string) {
       created_at,
       total,
       payment_method,
+      status,
+      voided_at,
+      void_reason,
       sold_by,
       sale_items(
         id,
+        product_id,
+        product_barcode,
         product_name,
         quantity,
         unit_price,
@@ -150,16 +187,27 @@ export async function getCashSessionsHistoryLocalFirst(fromDate?: string, toDate
   }
 
   try {
-    const sessions = await invoke<LocalCashSessionRecord[]>("list_local_cash_sessions", {
+    const localSessions = await invoke<LocalCashSessionRecord[]>("list_local_cash_sessions", {
       fromDate: fromDate || null,
       toDate: toDate || null,
       limit: !fromDate && !toDate ? 30 : null,
     });
 
-    return sessions.map((session) => ({
+    const normalizedLocalSessions = localSessions.map((session) => ({
       ...session,
       id: session.remote_id || session.id,
     })) as CashSession[];
+
+    try {
+      const remoteSessions = await getCashSessionsHistoryRemote(fromDate, toDate);
+      return mergeById(normalizedLocalSessions, remoteSessions).sort(
+        (left, right) =>
+          new Date(right.opened_at).getTime() - new Date(left.opened_at).getTime()
+      );
+    } catch (remoteError) {
+      console.warn("[history] remote cash sessions merge skipped:", remoteError);
+      return normalizedLocalSessions;
+    }
   } catch (error) {
     if (!isMissingTauriCommandError(error)) throw error;
     return getCashSessionsHistoryRemote(fromDate, toDate);
@@ -191,9 +239,15 @@ export async function getCashSessionReportLocalFirst(sessionId: string) {
   }
 
   try {
-    return await invoke<LocalCashSessionReportRow[]>("get_local_cash_session_report", {
+    const localRows = await invoke<LocalCashSessionReportRow[]>("get_local_cash_session_report", {
       cashSessionId: sessionId,
     });
+
+    if (localRows.length > 0) {
+      return localRows;
+    }
+
+    return getCashSessionReportRemote(sessionId);
   } catch (error) {
     if (!isMissingTauriCommandError(error)) throw error;
     return getCashSessionReportRemote(sessionId);
@@ -216,9 +270,15 @@ export async function getExpensesBySessionLocalFirst(sessionId: string) {
   }
 
   try {
-    return await invoke<LocalExpenseRecord[]>("list_local_expenses", {
+    const localExpenses = await invoke<LocalExpenseRecord[]>("list_local_expenses", {
       cashSessionId: sessionId,
     });
+
+    if (localExpenses.length > 0) {
+      return localExpenses;
+    }
+
+    return getExpensesBySessionRemote(sessionId);
   } catch (error) {
     if (!isMissingTauriCommandError(error)) throw error;
     return getExpensesBySessionRemote(sessionId);

@@ -34,6 +34,7 @@ import {
   Printer,
   Smartphone,
   Tags,
+  Tag,
   PanelLeft,
   PanelLeftClose,
 } from "lucide-react";
@@ -56,6 +57,7 @@ const navigation = [
     items: [
       { title: "Inventario", href: "/inventario", icon: Package },
       { title: "Lista de Precios", href: "/precios", icon: Tags },
+      { title: "Etiquetas", href: "/etiquetas", icon: Tag },
       { title: "Altas y Bajas", href: "/inventario/movimientos", icon: ArrowUpDown },
       { title: "Reportes", href: "/reportes", icon: BarChart3 },
     ],

@@ -8,13 +8,13 @@ use database::{
     get_local_sync_queue_stats, get_open_local_cash_session, initialize_database,
     list_local_bodega_products, list_local_cash_sessions, list_local_expenses,
     list_local_inventory_movements, list_local_partners, list_local_printers,
-    list_local_product_keys, list_local_products, list_local_sales, list_local_sync_queue,
-    list_local_sync_queue_preview,
+    list_local_product_keys, list_local_products, list_local_products_by_ids,
+    list_local_sale_keys, list_local_sales, list_local_sync_queue, list_local_sync_queue_preview,
     mark_local_sync_queue_item_failed, mark_local_sync_queue_item_synced, open_local_cash_session,
-    print_text_ticket_silent, register_local_sale, remove_local_sync_queue_item,
+    print_label_image_silent, print_text_ticket_silent, register_local_sale, remove_local_sync_queue_item,
     requeue_all_failed_local_sync_queue_items, requeue_local_sync_queue_item,
     set_local_app_setting, upsert_local_expense, upsert_local_product, upsert_remote_partners,
-    upsert_remote_products,
+    upsert_remote_products, void_local_sale,
 };
 use tauri::Manager;
 
@@ -48,8 +48,10 @@ pub fn run() {
             ensure_local_cash_sessions_sync_queued,
             close_local_cash_session,
             register_local_sale,
+            void_local_sale,
             get_local_session_sales_stats,
             list_local_sales,
+            list_local_sale_keys,
             list_local_cash_sessions,
             get_local_cash_session_report,
             adjust_local_product_stock,
@@ -70,6 +72,7 @@ pub fn run() {
             upsert_local_expense,
             upsert_remote_partners,
             list_local_products,
+            list_local_products_by_ids,
             list_local_product_keys,
             count_local_products,
             upsert_remote_products,
@@ -77,6 +80,7 @@ pub fn run() {
             generate_next_local_barcode,
             upsert_local_product,
             list_local_printers,
+            print_label_image_silent,
             print_text_ticket_silent
         ])
         .run(tauri::generate_context!())

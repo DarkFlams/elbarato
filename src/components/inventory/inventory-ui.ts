@@ -66,6 +66,10 @@ const MOVEMENT_VISUALS: Record<InventoryMovementReason, MovementVisual> = {
     iconClassName: "bg-sky-100 text-sky-700",
     badgeClassName: "border-sky-200 bg-sky-50 text-sky-700",
   },
+  sale_void: {
+    iconClassName: "bg-rose-100 text-rose-700",
+    badgeClassName: "border-rose-200 bg-rose-50 text-rose-700",
+  },
   restock: {
     iconClassName: "bg-emerald-100 text-emerald-700",
     badgeClassName: "border-emerald-200 bg-emerald-50 text-emerald-700",

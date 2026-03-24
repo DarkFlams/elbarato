@@ -27,6 +27,12 @@ interface LocalSaleResult {
   itemCount: number;
 }
 
+interface VoidLocalSaleResult {
+  saleId: string;
+  restoredItemCount: number;
+  status: "voided";
+}
+
 interface LocalSessionSalesStats {
   totalSales: number;
   totalCash: number;
@@ -112,7 +118,8 @@ export async function getSessionSalesStatsLocalFirst(cashSessionId: string) {
     const { data, error } = await supabase
       .from("sales")
       .select("id, total, payment_method")
-      .eq("cash_session_id", cashSessionId);
+      .eq("cash_session_id", cashSessionId)
+      .neq("status", "voided");
 
     if (error) throw error;
 
@@ -151,7 +158,8 @@ export async function getSessionSalesStatsLocalFirst(cashSessionId: string) {
     const { data, error: remoteError } = await supabase
       .from("sales")
       .select("id, total, payment_method")
-      .eq("cash_session_id", cashSessionId);
+      .eq("cash_session_id", cashSessionId)
+      .neq("status", "voided");
 
     if (remoteError) throw remoteError;
 
@@ -174,5 +182,70 @@ export async function getSessionSalesStatsLocalFirst(cashSessionId: string) {
         saleCount: 0,
       }
     );
+  }
+}
+
+export async function voidSaleLocalFirst(input: {
+  saleId: string;
+  reason: string;
+}) {
+  if (!isTauriRuntime()) {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc("void_sale", {
+      p_sale_id: input.saleId,
+      p_reason: input.reason.trim(),
+    });
+
+    if (error) throw error;
+
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      mode: "remote" as const,
+      data: {
+        saleId: String((row as { sale_id?: string } | null)?.sale_id ?? input.saleId),
+        restoredItemCount: Number(
+          (row as { restored_item_count?: number } | null)?.restored_item_count ?? 0
+        ),
+        status: "voided" as const,
+      },
+    };
+  }
+
+  try {
+    const result = await invoke<VoidLocalSaleResult>("void_local_sale", {
+      input: {
+        saleId: input.saleId,
+        reason: input.reason.trim(),
+      },
+    });
+
+    return {
+      mode: "local" as const,
+      data: result,
+    };
+  } catch (error) {
+    if (!isMissingTauriCommandError(error)) {
+      throw error;
+    }
+
+    const supabase = createClient();
+    const { data, error: remoteError } = await supabase.rpc("void_sale", {
+      p_sale_id: input.saleId,
+      p_reason: input.reason.trim(),
+    });
+
+    if (remoteError) throw remoteError;
+
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      mode: "remote" as const,
+      data: {
+        saleId: String((row as { sale_id?: string } | null)?.sale_id ?? input.saleId),
+        restoredItemCount: Number(
+          (row as { restored_item_count?: number } | null)?.restored_item_count ?? 0
+        ),
+        status: "voided" as const,
+      },
+    };
   }
 }

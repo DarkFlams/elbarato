@@ -49,6 +49,10 @@ function formatOperationSummary(operation: LocalSyncQueueItem) {
     const payload = JSON.parse(operation.payloadJson) as Record<string, unknown>;
 
     if (operation.entityName === "sales") {
+      if (operation.operationType === "void") {
+        return `Anulacion de ticket ${String(payload.saleId ?? operation.entityLocalId).slice(0, 8).toUpperCase()}`;
+      }
+
       const items = Array.isArray(payload.items) ? payload.items : [];
       const total = items.reduce((sum, item) => {
         const row = item as { quantity?: number; unitPrice?: number };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Tags } from "lucide-react";
 import Link from "next/link";
 import { PriceListTable } from "@/components/pricing/price-list-table";
@@ -12,18 +12,26 @@ import type { Partner } from "@/types/database";
 export default function PreciosPage() {
   const [partners, setPartners] = useState<Partner[]>([]);
 
-  const fetchPartners = useCallback(async () => {
-    try {
-      const data = await getCatalogPartners();
-      setPartners(data);
-    } catch (error) {
-      console.error("[PreciosPage] fetchPartners error:", error);
-    }
-  }, []);
-
   useEffect(() => {
+    let isCancelled = false;
+
+    const fetchPartners = async () => {
+      try {
+        const data = await getCatalogPartners();
+        if (!isCancelled) {
+          setPartners(data);
+        }
+      } catch (error) {
+        console.error("[PreciosPage] fetchPartners error:", error);
+      }
+    };
+
     void fetchPartners();
-  }, [fetchPartners]);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">

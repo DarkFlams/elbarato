@@ -6,15 +6,35 @@
 -- ============================================
 -- HARDENING CONTABLE (idempotencia + columnas de checkout)
 -- ============================================
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_type
+    WHERE typname = 'inventory_movement_reason'
+  ) THEN
+    ALTER TYPE inventory_movement_reason ADD VALUE IF NOT EXISTS 'sale_void';
+  END IF;
+END $$;
+
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_received NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_by UUID;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS void_reason TEXT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x3 NUMERIC(10,2);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x6 NUMERIC(10,2);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_x12 NUMERIC(10,2);
 ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS price_tier TEXT DEFAULT 'normal';
+
+UPDATE sales
+SET status = 'completed'
+WHERE status IS NULL
+   OR trim(status) = '';
 
 UPDATE sale_items
 SET price_tier = 'normal'
@@ -358,6 +378,109 @@ BEGIN
 
   RETURN QUERY
   SELECT v_sale_id, v_total, v_item_count;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+/**
+ * void_sale
+ * Anula una venta ya registrada, revierte stock y deja traza auditada.
+ */
+DROP FUNCTION IF EXISTS void_sale(UUID, TEXT);
+
+CREATE OR REPLACE FUNCTION void_sale(
+  p_sale_id UUID,
+  p_reason TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+  sale_id UUID,
+  restored_item_count INT
+) AS $$
+DECLARE
+  v_sale RECORD;
+  v_item RECORD;
+  v_reason TEXT;
+  v_restored_item_count INT := 0;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'Usuario no autenticado';
+  END IF;
+
+  IF p_sale_id IS NULL THEN
+    RAISE EXCEPTION 'Ticket requerido';
+  END IF;
+
+  SELECT
+    id,
+    COALESCE(status, 'completed') AS status
+  INTO v_sale
+  FROM sales
+  WHERE id = p_sale_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Ticket no encontrado';
+  END IF;
+
+  IF v_sale.status = 'voided' THEN
+    SELECT COALESCE(SUM(quantity), 0)::INT
+    INTO v_restored_item_count
+    FROM sale_items si
+    WHERE si.sale_id = v_sale.id;
+
+    RETURN QUERY
+    SELECT v_sale.id, v_restored_item_count;
+    RETURN;
+  END IF;
+
+  v_reason := NULLIF(trim(COALESCE(p_reason, '')), '');
+  IF v_reason IS NULL THEN
+    v_reason := 'Anulacion manual';
+  END IF;
+
+  UPDATE sales
+  SET
+    status = 'voided',
+    voided_at = now(),
+    voided_by = auth.uid(),
+    void_reason = v_reason
+  WHERE id = v_sale.id;
+
+  FOR v_item IN
+    SELECT si.product_id, si.quantity
+    FROM sale_items si
+    WHERE si.sale_id = v_sale.id
+  LOOP
+    UPDATE products
+    SET stock = stock + v_item.quantity,
+        stock_revision = stock_revision + 1,
+        updated_at = now()
+    WHERE id = v_item.product_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Producto no encontrado al revertir ticket';
+    END IF;
+
+    INSERT INTO inventory_movements (
+      product_id,
+      quantity_change,
+      reason,
+      reference_id,
+      performed_by
+    )
+    VALUES (
+      v_item.product_id,
+      v_item.quantity,
+      'sale_void',
+      v_sale.id,
+      auth.uid()
+    );
+
+    v_restored_item_count := v_restored_item_count + v_item.quantity;
+  END LOOP;
+
+  RETURN QUERY
+  SELECT v_sale.id, v_restored_item_count;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public;
@@ -883,6 +1006,7 @@ GRANT EXECUTE ON FUNCTION consume_mobile_access_code(TEXT, TEXT) TO anon, authen
 GRANT EXECUTE ON FUNCTION touch_mobile_session(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION issue_mobile_access_code(INT) TO authenticated;
 GRANT EXECUTE ON FUNCTION revoke_mobile_session(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION void_sale(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION apply_stock_count_adjustment(UUID, INT, BIGINT, TEXT, TEXT, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION find_stock_mobile_product(TEXT, UUID) TO anon, authenticated;
 
@@ -961,8 +1085,8 @@ BEGIN
       IF FOUND THEN
         SELECT COUNT(*)::INT
         INTO v_allocation_count
-        FROM expense_allocations
-        WHERE expense_id = v_expense_id;
+        FROM expense_allocations ea
+        WHERE ea.expense_id = v_expense_id;
 
         RETURN QUERY
         SELECT v_expense_id, v_allocation_count;
@@ -1002,8 +1126,8 @@ BEGIN
           IF FOUND THEN
             SELECT COUNT(*)::INT
             INTO v_allocation_count
-            FROM expense_allocations
-            WHERE expense_id = v_expense_id;
+            FROM expense_allocations ea
+            WHERE ea.expense_id = v_expense_id;
 
             RETURN QUERY
             SELECT v_expense_id, v_allocation_count;
@@ -1031,8 +1155,8 @@ BEGIN
       scope = p_scope
     WHERE id = v_expense_id;
 
-    DELETE FROM expense_allocations
-    WHERE expense_id = v_expense_id;
+    DELETE FROM expense_allocations ea
+    WHERE ea.expense_id = v_expense_id;
   END IF;
 
   IF p_scope = 'individual' THEN
@@ -1309,7 +1433,7 @@ BEGIN
     RAISE EXCEPTION 'Operacion invalida: %', p_operation;
   END IF;
 
-  IF p_reason IN ('sale', 'initial_stock') THEN
+  IF p_reason IN ('sale', 'initial_stock', 'sale_void') THEN
     RAISE EXCEPTION 'Motivo no permitido para ajuste manual: %', p_reason;
   END IF;
 

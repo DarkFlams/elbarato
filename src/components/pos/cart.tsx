@@ -19,8 +19,18 @@ import { SaleTicket } from "./sale-ticket";
 import type { CartItem, PartnerSaleSummary } from "@/types/database";
 import { toast } from "sonner";
 import { playCheckoutSound } from "@/lib/audio";
+import { getTicketAutoPrintEnabled } from "@/lib/local/printers";
 import { registerSaleLocalFirst } from "@/lib/local/sales";
 import { printTicketDirect } from "@/lib/print-ticket";
+
+type TicketSnapshot = {
+  items: CartItem[];
+  summaries: PartnerSaleSummary[];
+  total: number;
+  paymentMethod: "cash" | "transfer";
+  saleId: string;
+  date: Date;
+};
 
 export function Cart() {
   const {
@@ -41,16 +51,27 @@ export function Cart() {
   const total = getTotal();
 
   const [ticketOpen, setTicketOpen] = useState(false);
-  const [lastTicketData, setLastTicketData] = useState<{
-    items: CartItem[];
-    summaries: PartnerSaleSummary[];
-    total: number;
-    paymentMethod: "cash" | "transfer";
-    saleId: string;
-    date: Date;
-  } | null>(null);
+  const [lastTicketData, setLastTicketData] = useState<TicketSnapshot | null>(null);
   const submitInFlightRef = useRef(false);
   const saleRequestKeyRef = useRef<string | null>(null);
+
+  const tryAutoPrintTicket = async (ticketSnapshot: TicketSnapshot) => {
+    try {
+      const autoPrintEnabled = await getTicketAutoPrintEnabled();
+      if (!autoPrintEnabled) return;
+
+      await printTicketDirect({
+        items: ticketSnapshot.items,
+        partnerSummaries: ticketSnapshot.summaries,
+        total: ticketSnapshot.total,
+        paymentMethod: ticketSnapshot.paymentMethod,
+        saleId: ticketSnapshot.saleId,
+        date: ticketSnapshot.date,
+      });
+    } catch (error) {
+      console.error("[Cart] tryAutoPrintTicket error:", error);
+    }
+  };
 
   const handleRegisterSale = async () => {
     if (submitInFlightRef.current || isProcessing) return;
@@ -117,14 +138,7 @@ export function Cart() {
           date: new Date(),
         };
         setLastTicketData(ticketSnapshot);
-        void printTicketDirect({
-          items: ticketSnapshot.items,
-          partnerSummaries: ticketSnapshot.summaries,
-          total: ticketSnapshot.total,
-          paymentMethod: ticketSnapshot.paymentMethod,
-          saleId: ticketSnapshot.saleId,
-          date: ticketSnapshot.date,
-        });
+        void tryAutoPrintTicket(ticketSnapshot);
 
         playCheckoutSound();
         toast.warning(`Venta guardada offline - $${total.toFixed(2)}`, {
@@ -157,14 +171,7 @@ export function Cart() {
         date: new Date(),
       };
       setLastTicketData(ticketSnapshot);
-      void printTicketDirect({
-        items: ticketSnapshot.items,
-        partnerSummaries: ticketSnapshot.summaries,
-        total: ticketSnapshot.total,
-        paymentMethod: ticketSnapshot.paymentMethod,
-        saleId: ticketSnapshot.saleId,
-        date: ticketSnapshot.date,
-      });
+      void tryAutoPrintTicket(ticketSnapshot);
 
       playCheckoutSound();
       if (registerResult.mode === "local") {

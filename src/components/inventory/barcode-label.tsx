@@ -12,8 +12,10 @@
 
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
+import Image from "next/image";
 import { Printer } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,6 +24,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  buildProductLabelImageDataUrl,
+  printProductLabels,
+} from "@/lib/print-label";
 import type { ProductWithOwner } from "@/types/database";
 
 interface BarcodeLabelProps {
@@ -31,29 +37,18 @@ interface BarcodeLabelProps {
 }
 
 export function BarcodeLabel({ product, open, onClose }: BarcodeLabelProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [barcodeDataUrl, setBarcodeDataUrl] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   useEffect(() => {
     if (!product || !open) return;
 
     const generateBarcode = async () => {
       try {
-        const bwipjs = require("bwip-js") as any;
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        bwipjs.toCanvas(canvas, {
-          bcid: "code128",
-          text: product.barcode,
-          scale: 3,
-          height: 10,
-          includetext: true,
-          textxalign: "center",
-          textsize: 8,
+        const dataUrl = await buildProductLabelImageDataUrl(product, {
+          priceTier: "normal",
         });
-
-        setBarcodeDataUrl(canvas.toDataURL("image/png"));
+        setBarcodeDataUrl(dataUrl);
       } catch (err) {
         console.error("[BarcodeLabel] generation error:", err);
       }
@@ -67,43 +62,25 @@ export function BarcodeLabel({ product, open, onClose }: BarcodeLabelProps) {
   const handlePrintSingle = () => {
     if (!barcodeDataUrl) return;
 
-    const printWindow = window.open("", "_blank", "width=400,height=300");
-    if (!printWindow) return;
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Etiqueta - ${product.name}</title>
-          <style>
-            @page { size: 50mm 30mm; margin: 2mm; }
-            body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
-            .label {
-              width: 46mm; height: 26mm;
-              display: flex; flex-direction: column;
-              align-items: center; justify-content: center;
-              text-align: center; padding: 1mm;
-            }
-            .name { font-size: 8pt; font-weight: bold; margin-bottom: 1mm; }
-            .price { font-size: 10pt; font-weight: bold; margin-bottom: 1mm; }
-            .barcode img { max-width: 40mm; height: auto; }
-            .owner { font-size: 6pt; color: #666; }
-          </style>
-        </head>
-        <body>
-          <div class="label">
-            <div class="name">${product.name}</div>
-            <div class="price">$${Number(product.sale_price).toFixed(2)}</div>
-            <div class="barcode">
-              <img src="${barcodeDataUrl}" alt="barcode" />
-            </div>
-            <div class="owner">${product.owner.display_name}</div>
-          </div>
-          <script>window.onload=()=>{window.print();window.close();}</script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    setIsPrinting(true);
+    void printProductLabels({
+      product,
+      priceTier: "normal",
+      copies: 1,
+    })
+      .then(() => {
+        toast.success("Etiqueta enviada a impresion");
+      })
+      .catch((error) => {
+        const message =
+          error instanceof Error ? error.message : "No se pudo imprimir la etiqueta";
+        toast.error("Error al imprimir etiqueta", {
+          description: message,
+        });
+      })
+      .finally(() => {
+        setIsPrinting(false);
+      });
   };
 
   return (
@@ -126,9 +103,20 @@ export function BarcodeLabel({ product, open, onClose }: BarcodeLabelProps) {
           <p className="text-lg font-bold text-gray-900">
             ${Number(product.sale_price).toFixed(2)}
           </p>
-
-          {/* Barcode canvas (hidden but used for generation) */}
-          <canvas ref={canvasRef} className="mx-auto" />
+          {barcodeDataUrl ? (
+            <Image
+              src={barcodeDataUrl}
+              alt="Preview de etiqueta"
+              width={600}
+              height={360}
+              unoptimized
+              className="mx-auto w-full max-w-[260px] rounded border border-slate-200 bg-white"
+            />
+          ) : (
+            <div className="flex h-[140px] items-center justify-center text-xs text-slate-400">
+              Generando etiqueta...
+            </div>
+          )}
 
           <p className="text-[10px] text-gray-500">
             {product.owner.display_name}
@@ -141,11 +129,11 @@ export function BarcodeLabel({ product, open, onClose }: BarcodeLabelProps) {
           </Button>
           <Button
             onClick={handlePrintSingle}
-            disabled={!barcodeDataUrl}
+            disabled={!barcodeDataUrl || isPrinting}
             className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 border-0"
           >
             <Printer className="h-4 w-4 mr-2" />
-            Imprimir Etiqueta
+            {isPrinting ? "Imprimiendo..." : "Imprimir Etiqueta"}
           </Button>
         </DialogFooter>
       </DialogContent>

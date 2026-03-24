@@ -16,6 +16,8 @@ import { formatEcuadorDate, formatEcuadorTime } from "@/lib/timezone-ecuador";
 
 export interface SaleDetailItem {
   id: string;
+  product_id: string;
+  product_barcode: string;
   product_name: string;
   quantity: number;
   unit_price: number;
@@ -34,6 +36,9 @@ export interface SaleDetailData {
   created_at: string;
   total: number;
   payment_method: string;
+  status: "completed" | "voided";
+  voided_at: string | null;
+  void_reason: string | null;
   sold_by_partner: {
     display_name: string;
     color_hex: string;
@@ -93,6 +98,13 @@ export function SaleDetailDrawer({
                 <Clock className="h-3 w-3" />
                 {formatDate(sale.created_at)} a las {formatTime(sale.created_at)}
               </div>
+              {sale.status === "voided" ? (
+                <div className="mt-2">
+                  <Badge className="border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-50">
+                    Anulado
+                  </Badge>
+                </div>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -144,10 +156,19 @@ export function SaleDetailDrawer({
               </div>
               <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
                 <span className="text-base font-semibold text-slate-900">Total Venta</span>
-                <span className="text-2xl font-bold font-mono text-slate-900">
+                <span
+                  className={`text-2xl font-bold font-mono ${
+                    sale.status === "voided" ? "text-rose-600 line-through" : "text-slate-900"
+                  }`}
+                >
                   ${Number(sale.total).toFixed(2)}
                 </span>
               </div>
+              {sale.status === "voided" && sale.void_reason ? (
+                <div className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  Motivo: {sale.void_reason}
+                </div>
+              ) : null}
             </div>
 
             {/* Detalles de Productos */}
