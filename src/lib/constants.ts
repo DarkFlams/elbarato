@@ -41,7 +41,7 @@ export type PaymentMethod = (typeof PAYMENT_METHODS)[number]["id"];
 
 export const APP_NAME = "El Barato";
 export const APP_DESCRIPTION = "Sistema de Punto de Venta y Control de Gastos";
-export const APP_VERSION = "0.1.16";
+export const APP_VERSION = "0.1.17";
 export const CURRENCY = "USD";
 export const CURRENCY_SYMBOL = "$";
 

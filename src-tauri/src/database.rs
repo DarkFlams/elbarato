@@ -4384,6 +4384,11 @@ fn is_virtual_printer_name(name: &str) -> bool {
         || normalized.contains("fax")
 }
 
+fn is_zebra_printer_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized.contains("zebra") || normalized.contains("zdesigner")
+}
+
 #[cfg(target_os = "windows")]
 fn to_wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
@@ -4454,14 +4459,18 @@ fn build_tm_u220_raw_bytes(ticket_text: &str) -> Vec<u8> {
 }
 
 #[cfg(target_os = "windows")]
-fn print_raw_bytes_to_windows_printer(printer_name: &str, raw_bytes: &[u8]) -> Result<(), String> {
+fn print_raw_bytes_to_windows_printer(
+    printer_name: &str,
+    doc_name: &str,
+    raw_bytes: &[u8],
+) -> Result<(), String> {
     if raw_bytes.is_empty() {
         return Err("No hay datos para imprimir.".to_string());
     }
 
     unsafe {
         let printer_name_wide = to_wide_null(printer_name);
-        let doc_name_wide = to_wide_null("POS Ticket");
+        let doc_name_wide = to_wide_null(doc_name);
         let data_type_wide = to_wide_null("RAW");
 
         let mut printer_handle: HANDLE = null_mut();
@@ -4654,7 +4663,7 @@ pub fn print_text_ticket_silent(
         }
 
         let raw_bytes = build_tm_u220_raw_bytes(&ticket_text);
-        print_raw_bytes_to_windows_printer(&target_printer, &raw_bytes)
+        print_raw_bytes_to_windows_printer(&target_printer, "POS Ticket", &raw_bytes)
     }
 }
 
@@ -4676,6 +4685,7 @@ fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub fn print_label_image_silent(
     image_data_url: String,
+    zpl_payload: Option<String>,
     printer_name: Option<String>,
     copies: Option<u16>,
     width_mm: Option<u16>,
@@ -4710,6 +4720,29 @@ pub fn print_label_image_silent(
                 "La impresora seleccionada no es valida para etiquetas: {}.",
                 target_printer
             ));
+        }
+
+        if is_zebra_printer_name(&target_printer) {
+            let zpl_text = zpl_payload
+                .unwrap_or_default()
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .trim()
+                .to_string();
+
+            if zpl_text.is_empty() {
+                return Err(format!(
+                    "La impresora '{}' necesita un formato Zebra (ZPL) valido para imprimir etiquetas.",
+                    target_printer
+                ));
+            }
+
+            let mut raw_bytes = zpl_text.into_bytes();
+            if !raw_bytes.ends_with(b"\n") {
+                raw_bytes.push(b'\n');
+            }
+
+            return print_raw_bytes_to_windows_printer(&target_printer, "POS Label", &raw_bytes);
         }
 
         let png_bytes = decode_png_data_url(&image_data_url)?;

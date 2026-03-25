@@ -8,10 +8,11 @@ import { isTauriRuntime } from "@/lib/tauri-runtime";
 
 export const LABEL_WIDTH_MM = 50;
 export const LABEL_HEIGHT_MM = 30;
+export const ZEBRA_LABEL_DPI = 203;
 
 const LABEL_CANVAS_WIDTH = 600;
 const LABEL_CANVAS_HEIGHT = 360;
-const LABEL_BUSINESS_NAME = "CREACIONES. EL BARATO";
+const LABEL_BUSINESS_NAME = "CREACIONES EL BARATO";
 const BARCODE_BOX = {
   x: 28,
   y: 78,
@@ -41,10 +42,12 @@ type LabelRenderableProduct = Pick<
 interface LabelRenderOptions {
   priceTier?: LabelPriceTier;
   businessName?: string;
+  copies?: number;
 }
 
 interface PrintLabelImageOptions {
   imageDataUrl: string;
+  zplPayload?: string | null;
   printerName?: string | null;
   copies?: number;
 }
@@ -63,6 +66,23 @@ function normalizeLabelText(value: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
+}
+
+function sanitizeZplField(value: string) {
+  return normalizeLabelText(value)
+    .replace(/[\^~\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateLabelText(value: string, maxLength: number) {
+  const normalized = sanitizeZplField(value);
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function getLabelDots(mm: number) {
+  return Math.round((mm / 25.4) * ZEBRA_LABEL_DPI);
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, value: string, maxWidth: number, maxLines: number) {
@@ -200,8 +220,42 @@ export async function buildProductLabelImageDataUrl(
   return canvas.toDataURL("image/png");
 }
 
+export function buildProductLabelZpl(
+  product: LabelRenderableProduct,
+  options: LabelRenderOptions = {}
+) {
+  const priceTier = options.priceTier ?? "normal";
+  const copies = Math.min(Math.max(Math.trunc(options.copies ?? 1) || 1, 1), 200);
+  const businessName = truncateLabelText(options.businessName || LABEL_BUSINESS_NAME, 26);
+  const barcode = sanitizeZplField(product.barcode).replace(/\s+/g, "");
+  const displayCode = truncateLabelText(product.sku || product.barcode, 18);
+  const productName = truncateLabelText(product.name, 30);
+  const price = getLabelPrice(product, priceTier);
+  const barcodeModuleWidth = barcode.length > 10 ? 1 : 2;
+
+  return [
+    "^XA",
+    `^PW${getLabelDots(LABEL_WIDTH_MM)}`,
+    `^LL${getLabelDots(LABEL_HEIGHT_MM)}`,
+    "^LH0,0",
+    "^CI28",
+    `^FO16,10^A0N,28,28^FD${businessName}^FS`,
+    `^BY${barcodeModuleWidth},2,58`,
+    `^FO18,46^BCN,58,N,N,N^FD${barcode}^FS`,
+    `^FO18,122^A0N,22,22^FD${productName}^FS`,
+    `^FO18,148^A0N,18,18^FDCODIGO: ${displayCode}^FS`,
+    `^FO18,170^A0N,18,18^FDBARRAS: ${barcode}^FS`,
+    "^FO18,198^GB190,28,28,B,0^FS",
+    "^FO32,201^A0N,21,21^FR^FDPVP^FS",
+    `^FO108,197^A0N,28,28^FR^FD${Number(price).toFixed(2)}^FS`,
+    `^PQ${copies},0,1,N`,
+    "^XZ",
+  ].join("\n");
+}
+
 export async function printLabelImageDataUrl({
   imageDataUrl,
+  zplPayload,
   printerName,
   copies = 1,
 }: PrintLabelImageOptions) {
@@ -210,6 +264,7 @@ export async function printLabelImageDataUrl({
   if (isTauriRuntime()) {
     await invoke("print_label_image_silent", {
       imageDataUrl,
+      zplPayload: zplPayload?.trim() || null,
       printerName: printerName?.trim() || null,
       copies: safeCopies,
       widthMm: LABEL_WIDTH_MM,
@@ -276,10 +331,12 @@ export async function printProductLabels({
   printerName,
 }: PrintProductLabelsOptions) {
   const imageDataUrl = await buildProductLabelImageDataUrl(product, { priceTier });
+  const zplPayload = buildProductLabelZpl(product, { priceTier, copies });
   const selectedPrinter = printerName === undefined ? await getSavedLabelPrinterName() : printerName;
 
   await printLabelImageDataUrl({
     imageDataUrl,
+    zplPayload,
     printerName: selectedPrinter,
     copies,
   });
@@ -295,4 +352,21 @@ export async function buildSampleLabelImageDataUrl() {
     sale_price_x6: 14.5,
     sale_price_x12: 14.25,
   });
+}
+
+export async function buildSampleLabelPrintPayload(copies = 1) {
+  const sampleProduct = {
+    name: "PANTY PUSH UP SILIC",
+    barcode: "8530",
+    sku: "PPUCS5996TL",
+    sale_price: 15.25,
+    sale_price_x3: 14.75,
+    sale_price_x6: 14.5,
+    sale_price_x12: 14.25,
+  };
+
+  return {
+    imageDataUrl: await buildProductLabelImageDataUrl(sampleProduct),
+    zplPayload: buildProductLabelZpl(sampleProduct, { copies }),
+  };
 }

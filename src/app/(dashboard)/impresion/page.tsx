@@ -33,7 +33,7 @@ import {
   type LocalPrinterInfo,
 } from "@/lib/local/printers";
 import {
-  buildSampleLabelImageDataUrl,
+  buildSampleLabelPrintPayload,
   printLabelImageDataUrl,
 } from "@/lib/print-label";
 import { isTauriRuntime } from "@/lib/tauri-runtime";
@@ -264,9 +264,10 @@ export default function ImpresionPage() {
     setIsTestingLabel(true);
 
     try {
-      const imageDataUrl = await buildSampleLabelImageDataUrl();
+      const { imageDataUrl, zplPayload } = await buildSampleLabelPrintPayload(1);
       await printLabelImageDataUrl({
         imageDataUrl,
+        zplPayload,
         printerName: selectedLabelPrinterName,
         copies: 1,
       });
